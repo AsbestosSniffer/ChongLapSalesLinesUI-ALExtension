@@ -7,13 +7,9 @@ page 50100 "Item Picker Cart"
     {
         area(content)
         {
-            usercontroladdin(ItemPickerCart)
+            usercontrol(ItemPickerCart; ItemPickerCart)
             {
                 ApplicationArea = All;
-                HorizontalShrink = true;
-                HorizontalStretch = true;
-                VerticalShrink = true;
-                VerticalStretch = true;
 
                 trigger ControlAddInReady()
                 begin
@@ -105,21 +101,26 @@ page 50100 "Item Picker Cart"
 
     local procedure GetItemPictureAsBase64(var Item: Record Item): Text
     var
-        Media: Record Media;
+        TenantMedia: Record "Tenant Media";
         Base64Convert: Codeunit "Base64 Convert";
         PictureInStream: InStream;
         MimeType: Text;
     begin
-        Item.CalcFields(Picture);
-        if not Item.Picture.HasValue() then
+        if Item.Picture.Count() = 0 then
             exit('');
 
-        MimeType := 'image/png';
-        if Media.Get(Item.Picture.MediaId()) then
-            if Media."Mime Type" <> '' then
-                MimeType := Media."Mime Type";
+        if not TenantMedia.Get(Item.Picture.Item(1)) then
+            exit('');
 
-        Item.Picture.CreateInStream(PictureInStream);
+        TenantMedia.CalcFields(Content);
+        if not TenantMedia.Content.HasValue() then
+            exit('');
+
+        MimeType := TenantMedia."Mime Type";
+        if MimeType = '' then
+            MimeType := 'image/png';
+
+        TenantMedia.Content.CreateInStream(PictureInStream);
         exit('data:' + MimeType + ';base64,' + Base64Convert.ToBase64(PictureInStream));
     end;
 
