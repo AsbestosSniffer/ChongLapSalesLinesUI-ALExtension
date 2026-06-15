@@ -1,0 +1,33 @@
+{
+    "version": "0.2.0",
+    "configurations": [    
+        {
+            "name": "ProdCopy-v4",
+            "request": "launch",
+            "type": "al",
+            "environmentType": "Sandbox",
+            "environmentName": "ProdCopy-v4",
+            "startupObjectId": 22,
+            "startupObjectType": "Page",
+            "breakOnError": "All",
+            "launchBrowser": true,
+            "enableLongRunningSqlStatements": true,
+            "enableSqlInformationDebugger": true,
+            "tenant": "021f7583-ab6d-4cd6-81ff-7f422636b129"
+        },
+        {
+            "name": "Microsoft cloud sandbox",
+            "request": "launch",
+            "type": "al",
+            "environmentType": "Sandbox",
+            "environmentName": "ChongLapTesting",
+            "startupObjectId": 22,
+            "startupObjectType": "Page",
+            "breakOnError": "All",
+            "launchBrowser": true,
+            "enableLongRunningSqlStatements": true,
+            "enableSqlInformationDebugger": true,
+            "tenant": "021f7583-ab6d-4cd6-81ff-7f422636b129"
+        }
+    ]
+}
