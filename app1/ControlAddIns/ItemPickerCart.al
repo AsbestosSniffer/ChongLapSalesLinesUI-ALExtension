@@ -1,8 +1,8 @@
 controladdin ItemPickerCart
 {
-    Scripts = 'app1/ControlAddIns/Resources/ItemPickerCart.js';
-    StyleSheets = 'app1/ControlAddIns/Resources/ItemPickerCart.css';
-    StartupScript = 'app1/ControlAddIns/Resources/ItemPickerCartStartup.js';
+    Scripts = 'ControlAddIns/Resources/ItemPickerCart.js';
+    StyleSheets = 'ControlAddIns/Resources/ItemPickerCart.css';
+    StartupScript = 'ControlAddIns/Resources/ItemPickerCartStartup.js';
 
     RequestedHeight = 600;
     RequestedWidth = 1000;
