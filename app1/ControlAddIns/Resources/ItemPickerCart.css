@@ -1,0 +1,244 @@
+html, body, #controlAddIn {
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    font-family: "Segoe UI", "Segoe UI Web", Arial, sans-serif;
+    font-size: 13px;
+    color: #1f1f1f;
+}
+
+.ipc-container {
+    display: flex;
+    flex-direction: row;
+    height: 100vh;
+    box-sizing: border-box;
+}
+
+/* ------------ Search panel ------------ */
+
+.ipc-search-panel {
+    flex: 1 1 65%;
+    display: flex;
+    flex-direction: column;
+    border-right: 1px solid #e0e0e0;
+    min-width: 0;
+}
+
+.ipc-search-box {
+    padding: 10px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+#ipc-search-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 8px 10px;
+    font-size: 14px;
+    border: 1px solid #c8c8c8;
+    border-radius: 2px;
+    outline: none;
+}
+
+#ipc-search-input:focus {
+    border-color: #0078d4;
+}
+
+.ipc-results {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    padding: 6px;
+}
+
+.ipc-item-card {
+    display: flex;
+    align-items: center;
+    padding: 8px;
+    margin: 4px;
+    border: 1px solid #e6e6e6;
+    border-radius: 4px;
+    cursor: pointer;
+    background-color: #ffffff;
+    transition: background-color 0.1s ease-in-out, box-shadow 0.1s ease-in-out;
+}
+
+.ipc-item-card:hover {
+    background-color: #f3f9fd;
+    box-shadow: 0 1px 4px rgba(0, 0, 0, 0.12);
+}
+
+.ipc-item-img,
+.ipc-cart-img {
+    flex: 0 0 48px;
+    width: 48px;
+    height: 48px;
+    border-radius: 4px;
+    background-color: #f3f2f1;
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    margin-right: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    font-size: 10px;
+    color: #a6a6a6;
+}
+
+.ipc-cart-img {
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+}
+
+.ipc-item-info,
+.ipc-cart-info {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.ipc-item-no {
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ipc-item-desc {
+    color: #555555;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.ipc-item-price {
+    color: #777777;
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+.ipc-empty {
+    padding: 20px;
+    text-align: center;
+    color: #888888;
+}
+
+/* ------------ Cart panel ------------ */
+
+.ipc-cart-panel {
+    flex: 1 1 35%;
+    display: flex;
+    flex-direction: column;
+    min-width: 260px;
+}
+
+.ipc-cart-header {
+    padding: 10px;
+    font-weight: 600;
+    font-size: 14px;
+    border-bottom: 1px solid #e0e0e0;
+}
+
+.ipc-cart-items {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    padding: 6px;
+}
+
+.ipc-cart-row {
+    display: flex;
+    align-items: center;
+    padding: 6px;
+    margin: 4px;
+    border: 1px solid #e6e6e6;
+    border-radius: 4px;
+    background-color: #ffffff;
+}
+
+.ipc-qty-controls {
+    display: flex;
+    align-items: center;
+    margin: 0 6px;
+    flex: 0 0 auto;
+}
+
+.ipc-qty-btn {
+    width: 24px;
+    height: 24px;
+    line-height: 22px;
+    text-align: center;
+    border: 1px solid #c8c8c8;
+    background-color: #f3f2f1;
+    border-radius: 2px;
+    cursor: pointer;
+    font-size: 14px;
+    padding: 0;
+}
+
+.ipc-qty-btn:hover {
+    background-color: #e1dfdd;
+}
+
+.ipc-qty-input {
+    width: 48px;
+    text-align: center;
+    margin: 0 4px;
+    border: 1px solid #c8c8c8;
+    border-radius: 2px;
+    padding: 4px 2px;
+    font-size: 13px;
+}
+
+.ipc-remove-btn {
+    flex: 0 0 auto;
+    width: 22px;
+    height: 22px;
+    border: none;
+    background: transparent;
+    color: #a4262c;
+    font-size: 16px;
+    cursor: pointer;
+    line-height: 1;
+}
+
+.ipc-remove-btn:hover {
+    color: #d83b01;
+}
+
+.ipc-cart-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    padding: 10px;
+    border-top: 1px solid #e0e0e0;
+}
+
+.ipc-btn {
+    padding: 8px 16px;
+    font-size: 13px;
+    border-radius: 2px;
+    border: 1px solid transparent;
+    cursor: pointer;
+}
+
+.ipc-btn-primary {
+    background-color: #0078d4;
+    color: #ffffff;
+    border-color: #0078d4;
+}
+
+.ipc-btn-primary:hover {
+    background-color: #106ebe;
+}
+
+.ipc-btn-secondary {
+    background-color: #ffffff;
+    color: #1f1f1f;
+    border-color: #c8c8c8;
+}
+
+.ipc-btn-secondary:hover {
+    background-color: #f3f2f1;
+}
