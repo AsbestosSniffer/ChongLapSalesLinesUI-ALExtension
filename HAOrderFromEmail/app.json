@@ -1,0 +1,24 @@
+{
+  "id": "c3d7e9b2-4f1a-4e85-a732-8b6d0f2c1e94",
+  "name": "HA PO PDF View",
+  "publisher": "Chong Lap",
+  "version": "1.0.0.0",
+  "brief": "View PO PDF button on Sales Order page for HA orders.",
+  "description": "Adds a 'View PO PDF' action to the Sales Order page. Opens the original HA Purchase Order PDF stored in SharePoint via a redirect through the HA processing Function App.",
+  "privacyStatement": "",
+  "EULA": "",
+  "help": "",
+  "url": "",
+  "logo": "",
+  "dependencies": [],
+  "screenshots": [],
+  "platform": "1.0.0.0",
+  "application": "24.0.0.0",
+  "idRanges": [
+    {
+      "from": 50100,
+      "to": 50199
+    }
+  ],
+  "target": "Cloud"
+}
