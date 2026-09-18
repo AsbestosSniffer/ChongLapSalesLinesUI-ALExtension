@@ -18,6 +18,7 @@ permissionset 50150 "Mix Match"
         table "Mix Match Setup" = X,
         codeunit "Mix Match Engine" = X,
         codeunit "Mix Match Subscribers" = X,
+        codeunit "Mix Match Excel Mgt." = X,
         page "Mix Match Set List" = X,
         page "Mix Match Set Card" = X,
         page "Mix Match Set Items" = X,

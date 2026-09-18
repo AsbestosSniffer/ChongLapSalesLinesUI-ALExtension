@@ -46,6 +46,50 @@ page 50150 "Mix Match Set List"
 
     actions
     {
+        area(Processing)
+        {
+            action(ExportToExcel)
+            {
+                Caption = 'Export to Excel';
+                Image = ExportToExcel;
+                ToolTip = 'Download all Mix & Match sets with their items and tiers, and the Mix & Match setup, as an Excel workbook that can be imported into another company or environment.';
+
+                trigger OnAction()
+                var
+                    MixMatchExcelMgt: Codeunit "Mix Match Excel Mgt.";
+                begin
+                    MixMatchExcelMgt.ExportToExcel();
+                end;
+            }
+            action(ImportFromExcel)
+            {
+                Caption = 'Import from Excel';
+                Image = ImportExcel;
+                ToolTip = 'Import Mix & Match sets, items, tiers and setup from a workbook created with Export to Excel. Sets with the same code are replaced; other sets are not changed.';
+
+                trigger OnAction()
+                var
+                    MixMatchExcelMgt: Codeunit "Mix Match Excel Mgt.";
+                begin
+                    MixMatchExcelMgt.ImportFromExcel();
+                    CurrPage.Update(false);
+                end;
+            }
+        }
+        area(Promoted)
+        {
+            group(Category_Process)
+            {
+                Caption = 'Process';
+
+                actionref(ExportToExcel_Promoted; ExportToExcel)
+                {
+                }
+                actionref(ImportFromExcel_Promoted; ImportFromExcel)
+                {
+                }
+            }
+        }
         area(Navigation)
         {
             action(Setup)
