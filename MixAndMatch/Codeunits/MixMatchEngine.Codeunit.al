@@ -9,7 +9,11 @@ codeunit 50150 "Mix Match Engine"
     InherentPermissions = X;
 
     var
-        SetCodeByItem: Dictionary of [Code[20], Code[20]];
+        // Key: item no. plus the line's customer price group and discount group, which can differ per line.
+        // Value: the item's applicable active sets, most specific assignment first.
+        SetCodesByItem: Dictionary of [Text, List of [Code[20]]];
+        // Lines whose item is in more than one applicable set, with those sets.
+        CompetingSetsByLineNo: Dictionary of [Integer, List of [Code[20]]];
         SummaryText: Text;
         TrackedLineChanged: Boolean;
         WrongDocumentTypeTxt: Label 'Mix & Match only applies to sales quotes, orders and invoices.';
@@ -18,6 +22,7 @@ codeunit 50150 "Mix Match Engine"
         PartlyPostedTxt: Label 'Mix & Match was not applied because part of this document has already been shipped, invoiced or prepaid.';
         ExcludedTxt: Label 'This document is excluded from Mix & Match, so no Mix & Match discounts or free goods apply.';
         NoSetsTxt: Label 'None of the items on this document are in an active Mix & Match set.';
+        CompetingSetsTxt: Label 'Some items are in more than one set that applies to this document (%1). Each was given to the set that gives the lowest total.', Comment = '%1 = comma-separated set codes';
         OverrideSummaryTxt: Label 'Goods subtotal %1 (LCY) is at or above %2, so set items get their set''s highest discount.', Comment = '%1 = goods subtotal, %2 = threshold';
         SetSummaryTxt: Label 'Set %1: %2 units', Comment = '%1 = set code, %2 = qualifying quantity';
         NoTierSummaryTxt: Label ', no tier reached';
@@ -33,7 +38,8 @@ codeunit 50150 "Mix Match Engine"
     var
         SkipReason: Text;
     begin
-        Clear(SetCodeByItem);
+        Clear(SetCodesByItem);
+        Clear(CompetingSetsByLineNo);
         SummaryText := '';
         TrackedLineChanged := false;
 
@@ -181,6 +187,7 @@ codeunit 50150 "Mix Match Engine"
                 OverrideOn := IsBestDiscountOverrideOn(SalesHeader, GoodsSubtotalLCY, ThresholdLCY);
                 if OverrideOn then
                     AddSummaryLine(StrSubstNo(OverrideSummaryTxt, Round(GoodsSubtotalLCY, 0.01), ThresholdLCY));
+                ResolveCompetingSets(SalesHeader, TempSetLine, SetCodes, OverrideOn);
             end;
         end;
 
@@ -198,9 +205,12 @@ codeunit 50150 "Mix Match Engine"
 
     // Buffers the paid item lines that take part, grouped by the set their item belongs to. On the buffer,
     // MM Set Code is the item's current set and MM Std. Line Disc. % is the line's standard (non Mix & Match) discount.
+    // A line whose item is in several applicable sets is buffered with the most specific one for now;
+    // ResolveCompetingSets then decides. SetCodes lists every applicable set.
     local procedure CollectSetLines(SalesHeader: Record "Sales Header"; var TempSetLine: Record "Sales Line" temporary; var SetCodes: List of [Code[20]])
     var
         SalesLine: Record "Sales Line";
+        CandidateSetCodes: List of [Code[20]];
         SetCode: Code[20];
         PricingDate: Date;
     begin
@@ -212,14 +222,17 @@ codeunit 50150 "Mix Match Engine"
         if SalesLine.FindSet() then
             repeat
                 if IsEligibleLine(SalesLine) then begin
-                    SetCode := FindActiveSetCode(SalesLine."No.", PricingDate);
-                    if SetCode <> '' then begin
+                    CandidateSetCodes := FindActiveSetCodes(SalesHeader, SalesLine, PricingDate);
+                    if CandidateSetCodes.Count() > 0 then begin
                         TempSetLine := SalesLine;
-                        TempSetLine."MM Set Code" := SetCode;
+                        TempSetLine."MM Set Code" := CandidateSetCodes.Get(1);
                         TempSetLine."MM Std. Line Disc. %" := GetStandardDiscount(SalesLine);
                         TempSetLine.Insert();
-                        if not SetCodes.Contains(SetCode) then
-                            SetCodes.Add(SetCode);
+                        foreach SetCode in CandidateSetCodes do
+                            if not SetCodes.Contains(SetCode) then
+                                SetCodes.Add(SetCode);
+                        if CandidateSetCodes.Count() > 1 then
+                            CompetingSetsByLineNo.Add(SalesLine."Line No.", CandidateSetCodes);
                     end;
                 end;
             until SalesLine.Next() = 0;
@@ -244,26 +257,232 @@ codeunit 50150 "Mix Match Engine"
         exit(SalesLine."Line Discount %");
     end;
 
-    local procedure FindActiveSetCode(ItemNo: Code[20]; PricingDate: Date): Code[20]
+    // The active sets the line's item belongs to that are assigned to this document (see Mix Match Set.AppliesTo),
+    // most specific assignment first. The returned list is shared with the cache, so callers must not change it.
+    local procedure FindActiveSetCodes(SalesHeader: Record "Sales Header"; SalesLine: Record "Sales Line"; PricingDate: Date) SetCodes: List of [Code[20]]
     var
         MixMatchSetItem: Record "Mix Match Set Item";
         MixMatchSet: Record "Mix Match Set";
-        SetCode: Code[20];
+        CacheKey: Text;
     begin
-        if SetCodeByItem.Get(ItemNo, SetCode) then
-            exit(SetCode);
+        CacheKey := StrSubstNo('%1|%2|%3', SalesLine."No.", SalesLine."Customer Price Group", SalesLine."Customer Disc. Group");
+        if SetCodesByItem.Get(CacheKey, SetCodes) then
+            exit(SetCodes);
 
         MixMatchSetItem.SetCurrentKey("Item No.");
-        MixMatchSetItem.SetRange("Item No.", ItemNo);
+        MixMatchSetItem.SetRange("Item No.", SalesLine."No.");
         if MixMatchSetItem.FindSet() then
             repeat
                 if MixMatchSet.Get(MixMatchSetItem."Set Code") then
-                    if MixMatchSet.IsActiveOn(PricingDate) then
-                        SetCode := MixMatchSet."Code";
-            until (SetCode <> '') or (MixMatchSetItem.Next() = 0);
+                    if MixMatchSet.IsActiveOn(PricingDate) and MixMatchSet.AppliesTo(SalesHeader, SalesLine) then
+                        InsertBySpecificity(SetCodes, MixMatchSet);
+            until MixMatchSetItem.Next() = 0;
 
-        SetCodeByItem.Add(ItemNo, SetCode);
-        exit(SetCode);
+        SetCodesByItem.Add(CacheKey, SetCodes);
+    end;
+
+    // Keeps SetCodes ordered by Mix Match Set.GetSpecificityRank, then by code.
+    local procedure InsertBySpecificity(var SetCodes: List of [Code[20]]; MixMatchSet: Record "Mix Match Set")
+    var
+        OtherSet: Record "Mix Match Set";
+        Index: Integer;
+    begin
+        for Index := 1 to SetCodes.Count() do begin
+            OtherSet.Get(SetCodes.Get(Index));
+            if (MixMatchSet.GetSpecificityRank() < OtherSet.GetSpecificityRank()) or
+               ((MixMatchSet.GetSpecificityRank() = OtherSet.GetSpecificityRank()) and (MixMatchSet."Code" < OtherSet."Code"))
+            then begin
+                SetCodes.Insert(Index, MixMatchSet."Code");
+                exit;
+            end;
+        end;
+        SetCodes.Add(MixMatchSet."Code");
+    end;
+
+    // When items are in more than one applicable set, tries each priority order of the competing sets (an item goes
+    // to the first set in the order that it belongs to), lets every set pick its best tier as usual, and keeps the
+    // order with the lowest document total. Ties go to more free goods, then to the order tried first, which puts
+    // more specific assignments first. Sets left without lines are removed from SetCodes.
+    local procedure ResolveCompetingSets(SalesHeader: Record "Sales Header"; var TempSetLine: Record "Sales Line" temporary; var SetCodes: List of [Code[20]]; OverrideOn: Boolean)
+    var
+        MixMatchSet: Record "Mix Match Set";
+        CompetingSets: List of [Code[20]];
+        LineSets: List of [Code[20]];
+        Order: List of [Code[20]];
+        BestOrder: List of [Code[20]];
+        Orders: List of [List of [Code[20]]];
+        SetCode: Code[20];
+        BestTotal: Decimal;
+        BestFreeQty: Decimal;
+        Total: Decimal;
+        FreeQty: Decimal;
+        HasBest: Boolean;
+    begin
+        if CompetingSetsByLineNo.Count() = 0 then
+            exit;
+
+        foreach LineSets in CompetingSetsByLineNo.Values() do
+            foreach SetCode in LineSets do
+                if not CompetingSets.Contains(SetCode) then begin
+                    MixMatchSet.Get(SetCode);
+                    InsertBySpecificity(CompetingSets, MixMatchSet);
+                end;
+
+        BuildOrders(CompetingSets, Orders);
+        BestTotal := 0;
+        BestFreeQty := 0;
+        foreach Order in Orders do begin
+            AssignCompetingLines(SalesHeader, TempSetLine, Order);
+            EvaluateSets(TempSetLine, SetCodes, OverrideOn, Total, FreeQty);
+            if (not HasBest) or (Total < BestTotal) or ((Total = BestTotal) and (FreeQty > BestFreeQty)) then begin
+                BestOrder := Order;
+                BestTotal := Total;
+                BestFreeQty := FreeQty;
+                HasBest := true;
+            end;
+        end;
+        AssignCompetingLines(SalesHeader, TempSetLine, BestOrder);
+        RemoveUnusedSets(TempSetLine, SetCodes);
+        AddSummaryLine(StrSubstNo(CompetingSetsTxt, JoinCodes(CompetingSets)));
+    end;
+
+    // Every permutation of the competing sets, starting with the given (most specific first) order. Beyond
+    // MaxFullSearchSets sets that grows too fast, so each set is then only tried in front of the others.
+    local procedure BuildOrders(CompetingSets: List of [Code[20]]; var Orders: List of [List of [Code[20]]])
+    var
+        EmptyPrefix: List of [Code[20]];
+        SetCode: Code[20];
+    begin
+        if CompetingSets.Count() <= MaxFullSearchSets() then begin
+            AddPermutations(CompetingSets, EmptyPrefix, Orders);
+            exit;
+        end;
+        foreach SetCode in CompetingSets do
+            Orders.Add(MoveToFront(CompetingSets, SetCode));
+    end;
+
+    local procedure AddPermutations(Remaining: List of [Code[20]]; Prefix: List of [Code[20]]; var Orders: List of [List of [Code[20]]])
+    var
+        SetCode: Code[20];
+    begin
+        if Remaining.Count() = 0 then begin
+            Orders.Add(Prefix);
+            exit;
+        end;
+        foreach SetCode in Remaining do
+            AddPermutations(CopyWithout(Remaining, SetCode), CopyWith(Prefix, SetCode), Orders);
+    end;
+
+    // The helpers below each return a new list, so no two orders ever share a list instance.
+    local procedure CopyWithout(Source: List of [Code[20]]; Excluded: Code[20]) Result: List of [Code[20]]
+    var
+        SetCode: Code[20];
+    begin
+        foreach SetCode in Source do
+            if SetCode <> Excluded then
+                Result.Add(SetCode);
+    end;
+
+    local procedure CopyWith(Source: List of [Code[20]]; Appended: Code[20]) Result: List of [Code[20]]
+    var
+        SetCode: Code[20];
+    begin
+        foreach SetCode in Source do
+            Result.Add(SetCode);
+        Result.Add(Appended);
+    end;
+
+    local procedure MoveToFront(Source: List of [Code[20]]; First: Code[20]) Result: List of [Code[20]]
+    var
+        SetCode: Code[20];
+    begin
+        Result.Add(First);
+        foreach SetCode in Source do
+            if SetCode <> First then
+                Result.Add(SetCode);
+    end;
+
+    local procedure MaxFullSearchSets(): Integer
+    begin
+        // 5 competing sets = 120 orders to evaluate.
+        exit(5);
+    end;
+
+    local procedure AssignCompetingLines(SalesHeader: Record "Sales Header"; var TempSetLine: Record "Sales Line" temporary; Order: List of [Code[20]])
+    var
+        LineSets: List of [Code[20]];
+        LineNo: Integer;
+        SetCode: Code[20];
+        Assigned: Boolean;
+    begin
+        TempSetLine.Reset();
+        foreach LineNo in CompetingSetsByLineNo.Keys() do begin
+            LineSets := CompetingSetsByLineNo.Get(LineNo);
+            Assigned := false;
+            foreach SetCode in Order do
+                if (not Assigned) and LineSets.Contains(SetCode) then begin
+                    TempSetLine.Get(SalesHeader."Document Type", SalesHeader."No.", LineNo);
+                    if TempSetLine."MM Set Code" <> SetCode then begin
+                        TempSetLine."MM Set Code" := SetCode;
+                        TempSetLine.Modify();
+                    end;
+                    Assigned := true;
+                end;
+        end;
+    end;
+
+    // Total of all set lines, and total free quantity, when every set applies its best tier to the lines it has now.
+    local procedure EvaluateSets(var TempSetLine: Record "Sales Line" temporary; SetCodes: List of [Code[20]]; OverrideOn: Boolean; var Total: Decimal; var FreeQty: Decimal)
+    var
+        MixMatchSet: Record "Mix Match Set";
+        ChosenRule: Record "Mix Match Rule";
+        TopRule: Record "Mix Match Rule";
+        SetCode: Code[20];
+        SetTotal: Decimal;
+        SetFreeQty: Decimal;
+        UseTopRule: Boolean;
+    begin
+        Total := 0;
+        FreeQty := 0;
+        foreach SetCode in SetCodes do begin
+            TempSetLine.SetRange("MM Set Code", SetCode);
+            if not TempSetLine.IsEmpty() then begin
+                MixMatchSet.Get(SetCode);
+                Clear(TopRule);
+                UseTopRule := false;
+                if OverrideOn then
+                    UseTopRule := FindTopDiscountRule(SetCode, TopRule);
+                ChooseRule(SetCode, TempSetLine, CalcQualifyingQty(MixMatchSet, TempSetLine), UseTopRule, TopRule."Discount %", ChosenRule, SetFreeQty, SetTotal);
+                Total += SetTotal;
+                FreeQty += SetFreeQty;
+            end;
+        end;
+        TempSetLine.Reset();
+    end;
+
+    local procedure RemoveUnusedSets(var TempSetLine: Record "Sales Line" temporary; var SetCodes: List of [Code[20]])
+    var
+        UsedSetCodes: List of [Code[20]];
+        SetCode: Code[20];
+    begin
+        foreach SetCode in SetCodes do begin
+            TempSetLine.SetRange("MM Set Code", SetCode);
+            if not TempSetLine.IsEmpty() then
+                UsedSetCodes.Add(SetCode);
+        end;
+        TempSetLine.Reset();
+        SetCodes := UsedSetCodes;
+    end;
+
+    local procedure JoinCodes(Codes: List of [Code[20]]) Joined: Text
+    var
+        CodeValue: Code[20];
+    begin
+        foreach CodeValue in Codes do begin
+            if Joined <> '' then
+                Joined += ', ';
+            Joined += CodeValue;
+        end;
     end;
 
     // Same date BC pricing uses: posting date for invoices, order date for quotes and orders.
@@ -316,6 +535,7 @@ codeunit 50150 "Mix Match Engine"
         LineDiscountPct: Decimal;
         FreeQty: Decimal;
         LineRuleLineNo: Integer;
+        SetTotal: Decimal;
         HasChosenRule: Boolean;
         UseTopRule: Boolean;
         TagLines: Boolean;
@@ -323,7 +543,7 @@ codeunit 50150 "Mix Match Engine"
         QualifyingQty := CalcQualifyingQty(MixMatchSet, TempSetLine);
         if OverrideOn then
             UseTopRule := FindTopDiscountRule(MixMatchSet."Code", TopRule);
-        HasChosenRule := ChooseRule(MixMatchSet."Code", TempSetLine, QualifyingQty, UseTopRule, TopRule."Discount %", ChosenRule, FreeQty);
+        HasChosenRule := ChooseRule(MixMatchSet."Code", TempSetLine, QualifyingQty, UseTopRule, TopRule."Discount %", ChosenRule, FreeQty, SetTotal);
 
         // Under the subtotal override the discount comes from the set's top tier; free goods still come from the chosen tier.
         if UseTopRule then begin
@@ -359,15 +579,15 @@ codeunit 50150 "Mix Match Engine"
 
     // Picks the tier that gives the lowest total for the set's lines; ties go to more free goods, then to the higher
     // minimum quantity. With the subtotal override on, every candidate is priced at the top discount, so free goods decide.
-    local procedure ChooseRule(SetCode: Code[20]; var TempSetLine: Record "Sales Line" temporary; QualifyingQty: Decimal; UseTopRule: Boolean; TopDiscountPct: Decimal; var ChosenRule: Record "Mix Match Rule"; var ChosenFreeQty: Decimal) HasChosenRule: Boolean
+    local procedure ChooseRule(SetCode: Code[20]; var TempSetLine: Record "Sales Line" temporary; QualifyingQty: Decimal; UseTopRule: Boolean; TopDiscountPct: Decimal; var ChosenRule: Record "Mix Match Rule"; var ChosenFreeQty: Decimal; var BestTotal: Decimal) HasChosenRule: Boolean
     var
         MixMatchRule: Record "Mix Match Rule";
         CandidateDiscountPct: Decimal;
         CandidateTotal: Decimal;
         CandidateFreeQty: Decimal;
-        BestTotal: Decimal;
         BestMinQty: Decimal;
     begin
+        Clear(ChosenRule);
         // The baseline is "no tier".
         if UseTopRule then
             BestTotal := CalcSetTotal(TempSetLine, TopDiscountPct)
@@ -759,20 +979,22 @@ codeunit 50150 "Mix Match Engine"
         SalesLine: Record "Sales Line";
         PricingDate: Date;
     begin
+        // The cache holds results for one document only.
+        Clear(SetCodesByItem);
         PricingDate := GetPricingDate(SalesHeader);
         // The changed line may not be saved yet, so check it on its own.
         if (ChangedLine.Type = ChangedLine.Type::Item) and (ChangedLine."No." <> '') then
-            if FindActiveSetCode(ChangedLine."No.", PricingDate) <> '' then
+            if FindActiveSetCodes(SalesHeader, ChangedLine, PricingDate).Count() > 0 then
                 exit(true);
 
         SalesLine.SetRange("Document Type", SalesHeader."Document Type");
         SalesLine.SetRange("Document No.", SalesHeader."No.");
         SalesLine.SetRange(Type, SalesLine.Type::Item);
         SalesLine.SetFilter("No.", '<>%1', '');
-        SalesLine.SetLoadFields("No.");
+        SalesLine.SetLoadFields("No.", "Customer Price Group", "Customer Disc. Group");
         if SalesLine.FindSet() then
             repeat
-                if FindActiveSetCode(SalesLine."No.", PricingDate) <> '' then
+                if FindActiveSetCodes(SalesHeader, SalesLine, PricingDate).Count() > 0 then
                     exit(true);
             until SalesLine.Next() = 0;
         exit(false);

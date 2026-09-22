@@ -31,6 +31,12 @@ page 50150 "Mix Match Set List"
                 field("Unit of Measure Code"; Rec."Unit of Measure Code")
                 {
                 }
+                field("Assign-to Type"; Rec."Assign-to Type")
+                {
+                }
+                field("Assign-to No."; Rec."Assign-to No.")
+                {
+                }
                 field(Active; Rec.Active)
                 {
                 }

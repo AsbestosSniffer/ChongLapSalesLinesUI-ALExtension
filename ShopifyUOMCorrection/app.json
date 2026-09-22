@@ -1,8 +1,8 @@
 {
-  "id": "86e851b4-7ab5-4700-8ae2-096bfcd814ce",
-  "name": "LowSalesAmountNotification",
+  "id": "c121b847-a217-4e2b-80a0-ee5826c93c9e",
+  "name": "ShopifyUOMCorrection",
   "publisher": "Default Publisher",
-  "version": "1.0.15.0",
+  "version": "1.0.0.0",
   "brief": "",
   "description": "",
   "privacyStatement": "",
@@ -10,7 +10,7 @@
   "help": "",
   "url": "",
   "logo": "",
-  "dependencies": [  
+  "dependencies": [
     {
       "id":  "ec255f57-31d0-4ca2-b751-f2fa7c745abb",
       "name":  "Shopify Connector",
@@ -20,7 +20,7 @@
   ],
   "screenshots": [],
   "platform": "1.0.0.0",
-  "application": "27.5.0.0",
+  "application": "28.0.0.0",
   "idRanges": [
     {
       "from": 50100,
@@ -32,7 +32,7 @@
     "allowDownloadingSource": true,
     "includeSourceInSymbolFile": true
   },
-  "runtime": "15.0",
+  "runtime": "17.0",
   "features": [
     "NoImplicitWith"
   ]

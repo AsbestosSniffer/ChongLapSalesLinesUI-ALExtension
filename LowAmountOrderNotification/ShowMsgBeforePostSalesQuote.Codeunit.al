@@ -1,39 +1,45 @@
 namespace DefaultPublisher.ALProject3;
 
 using Microsoft.Sales.Document;
-using System.Utilities;
-using System.Automation;
-
-
+using Microsoft.Sales.Posting;
 
 codeunit 50105 ShowMsgBeforePostSalesQuote
 {
-    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Approvals Mgmt.", 'OnBeforePrePostApprovalCheckSales', '', false, false)]
-    local procedure ShowMsgBeforePostSalesQuote(
+    var
+        BelowThresholdQst: Label 'The total amount is %1 %2, which is below the threshold of %3 HKD.\Do you want to continue posting?', Comment = '%1 = document amount including VAT, %2 = currency code, %3 = threshold amount';
+        PostingCancelledErr: Label 'Posting has been cancelled because the total amount is below the threshold.';
+
+    // Raised once per posting run, before any posting writes.
+    [EventSubscriber(ObjectType::Codeunit, Codeunit::"Sales-Post", 'OnBeforePostSalesDoc', '', false, false)]
+    local procedure ShowMsgBeforePostSalesDoc(
         var SalesHeader: Record "Sales Header";
+        CommitIsSuppressed: Boolean;
+        PreviewMode: Boolean;
+        var HideProgressWindow: Boolean;
         var IsHandled: Boolean;
-        var Result: Boolean
+        var CalledBy: Integer
     )
     var
-        ConfirmText: Text;
-        ConfirmManagement: Codeunit "Confirm Management";
+        ThresholdAmount: Decimal;
     begin
-        SalesHeader.CalcFields("Amount Including VAT");
-        if SalesHeader."Amount Including VAT" >= 5000 then
+        if IsHandled or PreviewMode or (not GuiAllowed()) then
             exit;
 
-        ConfirmText := StrSubstNo(
-            'The total amount is %1 %2, which is below the threshold of 5000 HKD.\Do you want to continue posting?',
-            SalesHeader."Amount Including VAT",
-            SalesHeader."Currency Code" = '' ? 'HKD' : SalesHeader."Currency Code"
-        );
+        ThresholdAmount := 500;
 
-        if Confirm(ConfirmText, false) then
-            exit
-        else begin
-            Error('Posting has been cancelled because the total amount is below the threshold.');
-            IsHandled := true;
-            Result := false;
-        end;
+        SalesHeader.CalcFields("Amount Including VAT");
+        if SalesHeader."Amount Including VAT" >= ThresholdAmount then
+            exit;
+
+        if Confirm(
+             BelowThresholdQst,
+             false,
+             SalesHeader."Amount Including VAT",
+             SalesHeader."Currency Code" = '' ? 'HKD' : SalesHeader."Currency Code",
+             ThresholdAmount)
+        then
+            exit;
+
+        Error(PostingCancelledErr);
     end;
 }

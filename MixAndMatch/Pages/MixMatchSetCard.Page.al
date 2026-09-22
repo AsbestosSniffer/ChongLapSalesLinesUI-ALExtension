@@ -33,6 +33,24 @@ page 50151 "Mix Match Set Card"
                 {
                     Editable = not Rec.Active;
                 }
+                field("Assign-to Type"; Rec."Assign-to Type")
+                {
+                    Editable = not Rec.Active;
+                    Importance = Promoted;
+
+                    trigger OnValidate()
+                    begin
+                        SetAssignToNoEnabled();
+                        CurrPage.Update(true);
+                    end;
+                }
+                field("Assign-to No."; Rec."Assign-to No.")
+                {
+                    Editable = not Rec.Active;
+                    Enabled = AssignToNoEnabled;
+                    Importance = Promoted;
+                    ShowMandatory = AssignToNoEnabled;
+                }
                 field(Active; Rec.Active)
                 {
                 }
@@ -98,4 +116,22 @@ page 50151 "Mix Match Set Card"
             }
         }
     }
+
+    trigger OnAfterGetCurrRecord()
+    begin
+        SetAssignToNoEnabled();
+    end;
+
+    trigger OnNewRecord(BelowxRec: Boolean)
+    begin
+        SetAssignToNoEnabled();
+    end;
+
+    var
+        AssignToNoEnabled: Boolean;
+
+    local procedure SetAssignToNoEnabled()
+    begin
+        AssignToNoEnabled := Rec."Assign-to Type" <> Rec."Assign-to Type"::"All Customers";
+    end;
 }

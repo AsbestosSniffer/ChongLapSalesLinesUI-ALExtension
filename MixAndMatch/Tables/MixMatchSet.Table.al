@@ -1,7 +1,12 @@
 namespace DefaultPublisher.MixAndMatch;
 
+using Microsoft.CRM.Campaign;
+using Microsoft.CRM.Contact;
 using Microsoft.Foundation.UOM;
 using Microsoft.Inventory.Item;
+using Microsoft.Sales.Customer;
+using Microsoft.Sales.Document;
+using Microsoft.Sales.Pricing;
 
 table 50150 "Mix Match Set"
 {
@@ -79,6 +84,40 @@ table 50150 "Mix Match Set"
             FieldClass = FlowField;
             ToolTip = 'Specifies how many tiers the set has.';
         }
+        field(9; "Assign-to Type"; Enum "Mix Match Assign-to Type")
+        {
+            Caption = 'Assign-to Type';
+            ToolTip = 'Specifies the type of entity the set is assigned to, as on sales price lists. All Customers applies the set to every sales document.';
+
+            trigger OnValidate()
+            begin
+                TestField(Active, false);
+                if "Assign-to Type" <> xRec."Assign-to Type" then
+                    "Assign-to No." := '';
+            end;
+        }
+        field(10; "Assign-to No."; Code[20])
+        {
+            Caption = 'Assign-to No.';
+            TableRelation = if ("Assign-to Type" = const(Customer)) Customer
+            else
+            if ("Assign-to Type" = const("Customer Price Group")) "Customer Price Group"
+            else
+            if ("Assign-to Type" = const("Customer Disc. Group")) "Customer Discount Group"
+            else
+            if ("Assign-to Type" = const(Campaign)) Campaign
+            else
+            if ("Assign-to Type" = const(Contact)) Contact;
+            ToolTip = 'Specifies the entity the set is assigned to. The options depend on the Assign-to Type field. The set then applies only to documents for that entity, the same way a sales price list does.';
+
+            trigger OnValidate()
+            begin
+                TestField(Active, false);
+                if "Assign-to No." <> '' then
+                    if "Assign-to Type" = "Assign-to Type"::"All Customers" then
+                        Error(NoForAllCustomersErr, FieldCaption("Assign-to No."), "Assign-to Type");
+            end;
+        }
     }
 
     keys
@@ -113,7 +152,8 @@ table 50150 "Mix Match Set"
         NoItemsErr: Label 'Add at least one item to Mix & Match set %1 before activating it.', Comment = '%1 = set code';
         NoTiersErr: Label 'Add at least one tier to Mix & Match set %1 before activating it.', Comment = '%1 = set code';
         MissingUnitOfMeasureErr: Label 'Item %1 has no unit of measure %2, which Mix & Match set %3 counts in.', Comment = '%1 = item no., %2 = unit of measure code, %3 = set code';
-        ItemInOtherSetErr: Label 'Item %1 is already in active Mix & Match set %2 for an overlapping period. A product can only be in one active set at a time.', Comment = '%1 = item no., %2 = other set code';
+        ItemInOtherSetErr: Label 'Item %1 is already in active Mix & Match set %2, which has the same Assign-to Type and Assign-to No. for an overlapping period. Sets can share items only if they are assigned differently, for example one to All Customers and one to a specific customer; a document then gets whichever applicable set gives the lowest total.', Comment = '%1 = item no., %2 = other set code';
+        NoForAllCustomersErr: Label '%1 must be blank when Assign-to Type is %2.', Comment = '%1 = Assign-to No. caption, %2 = All Customers';
         DuplicateMinQtyErr: Label 'Mix & Match set %1 has more than one tier starting at %2 units.', Comment = '%1 = set code, %2 = minimum quantity';
         DiscountDecreasesErr: Label 'In Mix & Match set %1, the tier from %2 units gives a lower discount (%3) than the tier from %4 units (%5). A higher tier must keep at least the discount of the tiers below it.', Comment = '%1 = set code, %2 = higher minimum quantity, %3 = its discount, %4 = lower minimum quantity, %5 = its discount';
         FreeQtyDecreasesErr: Label 'In Mix & Match set %1, the tier from %2 units gives fewer free goods (%3) than the tier from %4 units (%5). A higher tier must give at least the free goods of the tiers below it.', Comment = '%1 = set code, %2 = higher minimum quantity, %3 = its free quantity, %4 = lower minimum quantity, %5 = its free quantity';
@@ -136,6 +176,8 @@ table 50150 "Mix Match Set"
         TestField(Active, false);
         if ("Starting Date" <> 0D) and ("Ending Date" <> 0D) and ("Starting Date" > "Ending Date") then
             Error(DateRangeErr);
+        if "Assign-to Type" <> "Assign-to Type"::"All Customers" then
+            TestField("Assign-to No.");
 
         MixMatchSetItem.SetRange("Set Code", "Code");
         if not MixMatchSetItem.FindSet() then
@@ -173,9 +215,109 @@ table 50150 "Mix Match Set"
             repeat
                 if OtherSetItem."Set Code" <> "Code" then
                     if OtherSet.Get(OtherSetItem."Set Code") then
-                        if OtherSet.Active and DateRangeOverlaps(OtherSet) then
+                        if OtherSet.Active and DateRangeOverlaps(OtherSet) and HasSameAssignment(OtherSet) then
                             Error(ItemInOtherSetErr, ItemNo, OtherSet."Code");
             until OtherSetItem.Next() = 0;
+    end;
+
+    // True when this set applies to the sales line's document, using the same sources BC uses to find
+    // sales price lists for a line (codeunit "Sales Line - Price", AddCustomerSources): the bill-to customer
+    // and contact, the header's campaign or else the customer's activated campaigns, and the line's
+    // customer price group and customer discount group.
+    procedure AppliesTo(SalesHeader: Record "Sales Header"; SalesLine: Record "Sales Line"): Boolean
+    begin
+        if ("Assign-to Type" <> "Assign-to Type"::"All Customers") and ("Assign-to No." = '') then
+            exit(false);
+
+        case "Assign-to Type" of
+            "Assign-to Type"::"All Customers":
+                exit(true);
+            "Assign-to Type"::Customer:
+                exit("Assign-to No." = SalesHeader."Bill-to Customer No.");
+            "Assign-to Type"::Contact:
+                exit("Assign-to No." = SalesHeader."Bill-to Contact No.");
+            "Assign-to Type"::"Customer Price Group":
+                exit("Assign-to No." = SalesLine."Customer Price Group");
+            "Assign-to Type"::"Customer Disc. Group":
+                exit("Assign-to No." = SalesLine."Customer Disc. Group");
+            "Assign-to Type"::Campaign:
+                exit(CampaignApplies(SalesHeader));
+        end;
+        exit(false);
+    end;
+
+    // True when Assign-to No. exists for the current Assign-to Type (always true for All Customers).
+    procedure AssignToNoExists(): Boolean
+    var
+        Customer: Record Customer;
+        CustomerPriceGroup: Record "Customer Price Group";
+        CustomerDiscountGroup: Record "Customer Discount Group";
+        Campaign: Record Campaign;
+        Contact: Record Contact;
+    begin
+        case "Assign-to Type" of
+            "Assign-to Type"::"All Customers":
+                exit(true);
+            "Assign-to Type"::Customer:
+                exit(Customer.Get("Assign-to No."));
+            "Assign-to Type"::"Customer Price Group":
+                exit(CustomerPriceGroup.Get("Assign-to No."));
+            "Assign-to Type"::"Customer Disc. Group":
+                exit(CustomerDiscountGroup.Get("Assign-to No."));
+            "Assign-to Type"::Campaign:
+                exit(Campaign.Get("Assign-to No."));
+            "Assign-to Type"::Contact:
+                exit(Contact.Get("Assign-to No."));
+        end;
+        exit(false);
+    end;
+
+    // Like BC pricing: the header's campaign if it has one; otherwise the campaigns activated for the bill-to
+    // customer, or, only if the customer has none, those activated for the bill-to contact's company.
+    local procedure CampaignApplies(SalesHeader: Record "Sales Header"): Boolean
+    var
+        CampaignTargetGroup: Record "Campaign Target Group";
+        Contact: Record Contact;
+    begin
+        if SalesHeader."Campaign No." <> '' then
+            exit(SalesHeader."Campaign No." = "Assign-to No.");
+
+        CampaignTargetGroup.SetRange(Type, CampaignTargetGroup.Type::Customer);
+        CampaignTargetGroup.SetRange("No.", SalesHeader."Bill-to Customer No.");
+        if CampaignTargetGroup.IsEmpty() then begin
+            if not Contact.Get(SalesHeader."Bill-to Contact No.") then
+                exit(false);
+            CampaignTargetGroup.SetRange(Type, CampaignTargetGroup.Type::Contact);
+            CampaignTargetGroup.SetRange("No.", Contact."Company No.");
+        end;
+        CampaignTargetGroup.SetRange("Campaign No.", "Assign-to No.");
+        exit(not CampaignTargetGroup.IsEmpty());
+    end;
+
+    // Sets assigned differently may share items: when more than one applies to a document, the engine gives each
+    // shared item to the set that yields the lowest total. Two sets with the identical assignment, however, are
+    // almost certainly a duplicate promotion, so that is still refused.
+    local procedure HasSameAssignment(OtherSet: Record "Mix Match Set"): Boolean
+    begin
+        exit(("Assign-to Type" = OtherSet."Assign-to Type") and ("Assign-to No." = OtherSet."Assign-to No."));
+    end;
+
+    // Lower is more specific. Used only to break ties between competing sets that give the same total.
+    procedure GetSpecificityRank(): Integer
+    begin
+        case "Assign-to Type" of
+            "Assign-to Type"::Customer:
+                exit(0);
+            "Assign-to Type"::Contact:
+                exit(1);
+            "Assign-to Type"::Campaign:
+                exit(2);
+            "Assign-to Type"::"Customer Disc. Group":
+                exit(3);
+            "Assign-to Type"::"Customer Price Group":
+                exit(4);
+        end;
+        exit(5);
     end;
 
     // A blank starting or ending date leaves the range open on that side.

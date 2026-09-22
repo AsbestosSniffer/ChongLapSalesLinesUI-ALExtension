@@ -26,6 +26,8 @@ codeunit 50152 "Mix Match Excel Mgt."
         EndingDateColTok: Label 'Ending Date', Locked = true;
         CountingUoMColTok: Label 'Counting Unit of Measure', Locked = true;
         ActiveColTok: Label 'Active', Locked = true;
+        AssignToTypeColTok: Label 'Assign-to Type', Locked = true;
+        AssignToNoColTok: Label 'Assign-to No.', Locked = true;
         SetCodeColTok: Label 'Set Code', Locked = true;
         ItemNoColTok: Label 'Item No.', Locked = true;
         TypeColTok: Label 'Type', Locked = true;
@@ -47,6 +49,8 @@ codeunit 50152 "Mix Match Excel Mgt."
         BlankDateCommentTxt: Label 'Leave blank for no limit.';
         CountingUoMCommentTxt: Label 'Leave blank to count in each item''s base unit of measure.';
         ActiveCommentTxt: Label 'Yes or No. Active sets are checked and activated after importing.';
+        AssignToTypeCommentTxt: Label 'All Customers, Customer, Customer Price Group, Customer Disc. Group, Campaign or Contact. Leave blank for All Customers.';
+        AssignToNoCommentTxt: Label 'The customer, group, campaign or contact the set is assigned to. Leave blank for All Customers.';
         ReferenceOnlyCommentTxt: Label 'For reference only. Not imported.';
         TypeCommentTxt: Label 'Discount, Free Goods, or Discount and Free Goods.';
         YesNoCommentTxt: Label 'Yes or No.';
@@ -72,6 +76,9 @@ codeunit 50152 "Mix Match Excel Mgt."
         FreeGoodsTierHasDiscountErr: Label 'Sheet %1, row %2: a Free Goods tier can''t give a discount. Change the type to Discount and Free Goods, or clear Discount %.', Comment = '%1 = sheet name, %2 = row number';
         MissingDiscountErr: Label 'Sheet %1, row %2: a %3 tier needs a Discount %.', Comment = '%1 = sheet name, %2 = row number, %3 = tier type';
         MissingFreeQuantityErr: Label 'Sheet %1, row %2: a %3 tier needs a Free Quantity.', Comment = '%1 = sheet name, %2 = row number, %3 = tier type';
+        InvalidAssignToTypeErr: Label 'Sheet %1, cell %2: "%3" is not a valid Assign-to Type. Use All Customers, Customer, Customer Price Group, Customer Disc. Group, Campaign or Contact.', Comment = '%1 = sheet name, %2 = cell reference, %3 = cell value';
+        AssignToNoNotAllowedErr: Label 'Sheet %1, cell %2: Assign-to No. must be blank when Assign-to Type is All Customers.', Comment = '%1 = sheet name, %2 = cell reference';
+        AssignToNoNotFoundErr: Label 'Sheet %1, cell %2: %3 %4 doesn''t exist in this company.', Comment = '%1 = sheet name, %2 = cell reference, %3 = assign-to type, %4 = assign-to no.';
         FreeItemNotInSetErr: Label 'Sheet %1, cell %2: default free item %3 isn''t listed for set %4 on the Items sheet.', Comment = '%1 = sheet name, %2 = cell reference, %3 = item no., %4 = set code';
         ConfirmImportQst: Label 'Import %1 Mix & Match sets with %2 items and %3 tiers from %4?\\%5 of these sets already exist in this company and will be replaced, including their items and tiers. Sets that aren''t in the file stay as they are. Best Discount Subtotal (LCY) will be set to %6.%7\\If any part of the file can''t be imported, nothing is imported.', Comment = '%1 = number of sets, %2 = number of items, %3 = number of tiers, %4 = file name, %5 = number of sets that already exist, %6 = threshold amount, %7 = optional currency warning';
         CurrencyWarningTxt: Label '\\Warning: the file was exported from a company whose local currency is %1, but this company''s local currency is %2.', Comment = '%1 = local currency code in the file, %2 = local currency code of this company';
@@ -192,6 +199,8 @@ codeunit 50152 "Mix Match Excel Mgt."
         AddHeaderCell(EndingDateColTok, BlankDateCommentTxt);
         AddHeaderCell(CountingUoMColTok, CountingUoMCommentTxt);
         AddHeaderCell(ActiveColTok, ActiveCommentTxt);
+        AddHeaderCell(AssignToTypeColTok, AssignToTypeCommentTxt);
+        AddHeaderCell(AssignToNoColTok, AssignToNoCommentTxt);
 
         if MixMatchSet.FindSet() then
             repeat
@@ -202,6 +211,8 @@ codeunit 50152 "Mix Match Excel Mgt."
                 AddDateCell(MixMatchSet."Ending Date");
                 AddTextCell(MixMatchSet."Unit of Measure Code");
                 AddYesNoCell(MixMatchSet.Active);
+                AddTextCell(GetAssignToTypeName(MixMatchSet."Assign-to Type"));
+                AddTextCell(MixMatchSet."Assign-to No.");
             until MixMatchSet.Next() = 0;
     end;
 
@@ -302,6 +313,7 @@ codeunit 50152 "Mix Match Excel Mgt."
         UnitOfMeasure: Record "Unit of Measure";
         SetCode: Text;
         RowNo: Integer;
+        HasAssignToColumns: Boolean;
     begin
         CheckHeaderCell(SetsSheetTok, 1, CodeColTok);
         CheckHeaderCell(SetsSheetTok, 2, DescriptionColTok);
@@ -309,9 +321,15 @@ codeunit 50152 "Mix Match Excel Mgt."
         CheckHeaderCell(SetsSheetTok, 4, EndingDateColTok);
         CheckHeaderCell(SetsSheetTok, 5, CountingUoMColTok);
         CheckHeaderCell(SetsSheetTok, 6, ActiveColTok);
+        // Workbooks exported before sets had an assignment have no Assign-to columns; their sets apply to all customers.
+        HasAssignToColumns := GetCellText(1, 7) <> '';
+        if HasAssignToColumns then begin
+            CheckHeaderCell(SetsSheetTok, 7, AssignToTypeColTok);
+            CheckHeaderCell(SetsSheetTok, 8, AssignToNoColTok);
+        end;
 
         for RowNo := 2 to GetLastRowNo() do
-            if not IsRowBlank(RowNo, 6) then begin
+            if not IsRowBlank(RowNo, 8) then begin
                 SetCode := GetCodeValue(SetsSheetTok, RowNo, 1, CodeColTok, MaxStrLen(TempMixMatchSet."Code"), true);
                 if TempMixMatchSet.Get(SetCode) then
                     Error(DuplicateSetErr, SetsSheetTok, GetCellReference(RowNo, 1), SetCode);
@@ -332,6 +350,8 @@ codeunit 50152 "Mix Match Excel Mgt."
                         Error(UnitOfMeasureNotFoundErr, SetsSheetTok, GetCellReference(RowNo, 5), TempMixMatchSet."Unit of Measure Code");
 
                 TempMixMatchSet.Active := GetYesNoValue(SetsSheetTok, RowNo, 6, ActiveColTok);
+                if HasAssignToColumns then
+                    ReadAssignTo(TempMixMatchSet, RowNo);
                 TempMixMatchSet.Insert();
             end;
     end;
@@ -504,6 +524,8 @@ codeunit 50152 "Mix Match Excel Mgt."
             MixMatchSet.Validate("Starting Date", TempMixMatchSet."Starting Date");
             MixMatchSet.Validate("Ending Date", TempMixMatchSet."Ending Date");
             MixMatchSet.Validate("Unit of Measure Code", TempMixMatchSet."Unit of Measure Code");
+            MixMatchSet.Validate("Assign-to Type", TempMixMatchSet."Assign-to Type");
+            MixMatchSet.Validate("Assign-to No.", TempMixMatchSet."Assign-to No.");
             MixMatchSet.Modify(true);
 
             TempMixMatchSetItem.SetRange("Set Code", TempMixMatchSet."Code");
@@ -682,6 +704,50 @@ codeunit 50152 "Mix Match Excel Mgt."
     end;
 
     // Exported as the enum value name so the file doesn't depend on the user's language; captions are accepted too.
+    local procedure ReadAssignTo(var TempMixMatchSet: Record "Mix Match Set" temporary; RowNo: Integer)
+    begin
+        TempMixMatchSet."Assign-to Type" := GetAssignToTypeValue(SetsSheetTok, RowNo, 7);
+        TempMixMatchSet."Assign-to No." := CopyStr(GetCodeValue(SetsSheetTok, RowNo, 8, AssignToNoColTok, MaxStrLen(TempMixMatchSet."Assign-to No."), false), 1, MaxStrLen(TempMixMatchSet."Assign-to No."));
+
+        if TempMixMatchSet."Assign-to Type" = TempMixMatchSet."Assign-to Type"::"All Customers" then begin
+            if TempMixMatchSet."Assign-to No." <> '' then
+                Error(AssignToNoNotAllowedErr, SetsSheetTok, GetCellReference(RowNo, 8));
+            exit;
+        end;
+
+        if TempMixMatchSet."Assign-to No." = '' then
+            Error(ValueRequiredErr, SetsSheetTok, GetCellReference(RowNo, 8), AssignToNoColTok);
+        if not TempMixMatchSet.AssignToNoExists() then
+            Error(AssignToNoNotFoundErr, SetsSheetTok, GetCellReference(RowNo, 8), TempMixMatchSet."Assign-to Type", TempMixMatchSet."Assign-to No.");
+    end;
+
+    // Accepts the value's name or its caption, in any case. A blank cell means All Customers.
+    local procedure GetAssignToTypeValue(SheetName: Text; RowNo: Integer; ColumnNo: Integer) AssignToType: Enum "Mix Match Assign-to Type"
+    var
+        ValueText: Text;
+        TypeNames: List of [Text];
+        TypeOrdinals: List of [Integer];
+        Index: Integer;
+    begin
+        ValueText := UpperCase(GetCellText(RowNo, ColumnNo));
+        if ValueText = '' then
+            exit(AssignToType::"All Customers");
+
+        TypeNames := Enum::"Mix Match Assign-to Type".Names();
+        TypeOrdinals := Enum::"Mix Match Assign-to Type".Ordinals();
+        for Index := 1 to TypeOrdinals.Count() do begin
+            AssignToType := Enum::"Mix Match Assign-to Type".FromInteger(TypeOrdinals.Get(Index));
+            if (ValueText = UpperCase(TypeNames.Get(Index))) or (ValueText = UpperCase(Format(AssignToType))) then
+                exit(AssignToType);
+        end;
+        Error(InvalidAssignToTypeErr, SheetName, GetCellReference(RowNo, ColumnNo), GetCellText(RowNo, ColumnNo));
+    end;
+
+    local procedure GetAssignToTypeName(AssignToType: Enum "Mix Match Assign-to Type"): Text
+    begin
+        exit(AssignToType.Names().Get(AssignToType.Ordinals().IndexOf(AssignToType.AsInteger())));
+    end;
+
     local procedure GetRuleTypeValue(SheetName: Text; RowNo: Integer; ColumnNo: Integer) RuleType: Enum "Mix Match Rule Type"
     var
         ValueText: Text;
