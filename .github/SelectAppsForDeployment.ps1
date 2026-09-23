@@ -1,17 +1,23 @@
-# Used by the "Deploy Selected Apps" workflow.
+# Used by the "Deploy Selected Apps" and "Build And Deploy Selected Apps" workflows.
 # Turns the apps chosen in the workflow run into AL-Go's excludeAppIds for the target environment: every app in the
 # downloaded build that wasn't chosen is excluded, so AL-Go's own Deploy action publishes only the chosen ones.
 #
 # Apps are chosen by folder name (e.g. ShopifyUOMCorrection) or by the name in app.json, comma-separated; * means all.
 # Matching uses app IDs, read from app.json in the repository and from the manifest inside each built .app file,
 # so an app renamed between the build and now is still found.
+#
+# -ValidateOnly only checks the chosen names against the repository, so a typo fails before a build is started.
 Param(
     [string] $SelectedApps = $env:SelectedApps,
+    # The workflow run's inputs as JSON. Every input named app_<folder> that is true counts as a chosen app,
+    # which is how the checkboxes on the run form are read. Added to anything typed in $SelectedApps.
+    [string] $InputsJson = $env:InputsJson,
     [string] $EnvironmentName = $env:EnvironmentName,
     [string] $DeploymentEnvironmentsJson = $env:DeploymentEnvironmentsJson,
     [string] $SettingsJson = $env:Settings,
     [string] $RepositoryFolder = $env:GITHUB_WORKSPACE,
-    [string] $ArtifactsFolder = (Join-Path $env:GITHUB_WORKSPACE '.artifacts')
+    [string] $ArtifactsFolder = (Join-Path $env:GITHUB_WORKSPACE '.artifacts'),
+    [switch] $ValidateOnly
 )
 
 $ErrorActionPreference = "Stop"; $ProgressPreference = "SilentlyContinue"; Set-StrictMode -Version 2.0
@@ -72,20 +78,19 @@ $repoApps = @(Get-ChildItem -Path $RepositoryFolder -Directory | ForEach-Object 
         }
     })
 
-# Apps in the build. Only the Apps artifact counts, not TestApps or Dependencies.
-$builtApps = @(Get-ChildItem -Path $ArtifactsFolder -Recurse -Filter '*.app' |
-    Where-Object { (Split-Path $_.DirectoryName -Leaf) -match '-Apps-' } |
-    ForEach-Object { Get-AppFromAppFile -Path $_.FullName })
-if ($builtApps.Count -eq 0) {
-    throw "The downloaded build contains no apps. Check that the chosen version has a successful CI/CD build."
-}
-
 $tokens = @($SelectedApps -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
-if ($tokens.Count -eq 0 -or $tokens -contains '*') {
-    $selectedIds = @($builtApps | ForEach-Object { $_.Id })
+if ($InputsJson) {
+    $inputs = $InputsJson | ConvertFrom-Json
+    foreach ($property in $inputs.PSObject.Properties) {
+        if ($property.Name -like 'app_*' -and "$($property.Value)" -eq 'true') {
+            $tokens += $property.Name.Substring(4)
+        }
+    }
+    $tokens = @($tokens | Select-Object -Unique)
 }
-else {
-    $selectedIds = @()
+$allApps = ($tokens.Count -eq 0) -or ($tokens -contains '*')
+$selectedIds = @()
+if (-not $allApps) {
     foreach ($token in $tokens) {
         $match = @($repoApps | Where-Object { $_.Folder -eq $token -or $_.Name -eq $token })
         if ($match.Count -eq 0) {
@@ -95,7 +100,30 @@ else {
         $selectedIds += $match[0].Id
     }
     $selectedIds = @($selectedIds | Select-Object -Unique)
+}
 
+if ($ValidateOnly) {
+    if ($allApps) {
+        Write-Host "All apps selected."
+    }
+    else {
+        Write-Host "Selected apps: $(($repoApps | Where-Object { $selectedIds -contains $_.Id } | ForEach-Object { $_.Folder }) -join ', ')"
+    }
+    return
+}
+
+# Apps in the build. Only the Apps artifact counts, not TestApps or Dependencies.
+$builtApps = @(Get-ChildItem -Path $ArtifactsFolder -Recurse -Filter '*.app' |
+    Where-Object { (Split-Path $_.DirectoryName -Leaf) -match '-Apps-' } |
+    ForEach-Object { Get-AppFromAppFile -Path $_.FullName })
+if ($builtApps.Count -eq 0) {
+    throw "The downloaded build contains no apps. Check that the chosen version has a successful build."
+}
+
+if ($allApps) {
+    $selectedIds = @($builtApps | ForEach-Object { $_.Id })
+}
+else {
     $notBuilt = @($selectedIds | Where-Object { $builtApps.Id -notcontains $_ })
     if ($notBuilt.Count -gt 0) {
         $names = ($repoApps | Where-Object { $notBuilt -contains $_.Id } | ForEach-Object { $_.Folder }) -join ', '

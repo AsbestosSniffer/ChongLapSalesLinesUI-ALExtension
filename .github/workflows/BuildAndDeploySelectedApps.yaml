@@ -1,18 +1,26 @@
 # Custom workflow (not part of AL-Go for GitHub, so Update AL-Go System Files leaves it alone).
-# Based on AL-Go's "Publish To Environment": deploys an existing build to one environment (or all of them),
-# but only the apps chosen in the run. The apps not chosen are passed to AL-Go's Deploy action as excludeAppIds
-# by .github/SelectAppsForDeployment.ps1. When AL-Go is updated, compare the steps below with the new
-# PublishToEnvironment.yaml and bring over any changes to the AL-Go action versions.
-name: ' Deploy Selected Apps'
+# Builds the branch the same way CI/CD does - by calling AL-Go's own _BuildALGoProject.yaml - and then deploys only
+# the apps chosen in the run, to the environment chosen in the run. Choose the environment "none (build only)" to
+# build without deploying anything; the build can be deployed later with the "Deploy Selected Apps" workflow.
+# CI/CD is untouched and keeps building and deploying everything.
+#
+# Every app is built (building one app is barely faster than building all of them, as most of the time goes on
+# downloading Business Central and creating the container); only deployment is selective.
+#
+# When AL-Go is updated, compare the Initialization and Build jobs below with the new CICD.yaml and bring over any
+# changes to the AL-Go action versions and to the inputs of _BuildALGoProject.yaml.
+name: ' Build And Deploy Selected Apps'
 
 on:
   workflow_dispatch:
     inputs:
       environmentName:
-        description: Environment to deploy to (* for all environments)
+        description: Environment to deploy the build to
         type: choice
         required: true
+        default: 'none (build only)'
         options:
+          - 'none (build only)'
           - ProdCopy-v5
           - ProdCopy-v4
           - ProdCopy-v6
@@ -56,24 +64,17 @@ on:
         type: string
         required: false
         default: ''
-      appVersion:
-        description: Build to deploy from (latest = latest successful CI/CD build, or a version number such as 1.0.14.0)
-        type: string
-        required: false
-        default: 'latest'
 
 permissions:
   actions: read
   contents: read
   id-token: write
-  pull-requests: read
-  checks: read
-
-defaults:
-  run:
-    shell: powershell
+  pages: read
+  security-events: write
+  packages: read
 
 env:
+  workflowDepth: 1
   ALGoOrgSettings: ${{ vars.ALGoOrgSettings }}
   ALGoRepoSettings: ${{ vars.ALGoRepoSettings }}
 
@@ -82,10 +83,18 @@ jobs:
     needs: [ ]
     runs-on: [ windows-latest ]
     outputs:
+      telemetryScopeJson: ${{ steps.init.outputs.telemetryScopeJson }}
+      githubRunner: ${{ steps.ReadSettings.outputs.GitHubRunnerJson }}
+      githubRunnerShell: ${{ steps.ReadSettings.outputs.GitHubRunnerShell }}
+      projects: ${{ steps.determineProjectsToBuild.outputs.ProjectsJson }}
+      skippedProjects: ${{ steps.determineProjectsToBuild.outputs.SkippedProjectsJson }}
+      projectDependenciesJson: ${{ steps.determineProjectsToBuild.outputs.ProjectDependenciesJson }}
+      buildOrderJson: ${{ steps.determineProjectsToBuild.outputs.BuildOrderJson }}
+      baselineWorkflowRunId: ${{ steps.determineProjectsToBuild.outputs.BaselineWorkflowRunId }}
+      baselineWorkflowSHA: ${{ steps.determineProjectsToBuild.outputs.BaselineWorkflowSHA }}
       environmentsMatrixJson: ${{ steps.DetermineDeploymentEnvironments.outputs.EnvironmentsMatrixJson }}
       environmentCount: ${{ steps.DetermineDeploymentEnvironments.outputs.EnvironmentCount }}
       deploymentEnvironmentsJson: ${{ steps.DetermineDeploymentEnvironments.outputs.DeploymentEnvironmentsJson }}
-      telemetryScopeJson: ${{ steps.init.outputs.telemetryScopeJson }}
     steps:
       - name: Dump Workflow Information
         uses: microsoft/AL-Go-Actions/DumpWorkflowInfo@v9.2
@@ -94,6 +103,8 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          lfs: true
 
       - name: Initialize the workflow
         id: init
@@ -106,9 +117,32 @@ jobs:
         uses: microsoft/AL-Go-Actions/ReadSettings@v9.2
         with:
           shell: powershell
+          get: type
 
+      # Checked here so a mistyped app name fails in seconds instead of after the build.
+      - name: Validate selected apps
+        env:
+          SelectedApps: ${{ github.event.inputs.otherApps }}
+          InputsJson: ${{ toJson(github.event.inputs) }}
+        run: |
+          & (Join-Path $env:GITHUB_WORKSPACE '.github/SelectAppsForDeployment.ps1') -ValidateOnly
+
+      - name: Determine Workflow Depth
+        id: DetermineWorkflowDepth
+        run: |
+          Add-Content -Encoding UTF8 -Path $env:GITHUB_OUTPUT -Value "WorkflowDepth=$($env:workflowDepth)"
+
+      - name: Determine Projects To Build
+        id: determineProjectsToBuild
+        uses: microsoft/AL-Go-Actions/DetermineProjectsToBuild@v9.2
+        with:
+          shell: powershell
+          maxBuildDepth: ${{ env.workflowDepth }}
+
+      # Skipped for build-only runs: the action throws if asked for an environment that doesn't exist.
       - name: Determine Deployment Environments
         id: DetermineDeploymentEnvironments
+        if: github.event.inputs.environmentName != 'none (build only)'
         uses: microsoft/AL-Go-Actions/DetermineDeploymentEnvironments@v9.2
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -118,10 +152,36 @@ jobs:
           type: 'Publish'
           createEnvIfNotExists: false
 
-  Deploy:
+  Build:
     needs: [ Initialization ]
-    if: needs.Initialization.outputs.environmentCount > 0
-    strategy: ${{ fromJson(needs.Initialization.outputs.environmentsMatrixJson) }}
+    if: (!failure()) && (!cancelled()) && fromJson(needs.Initialization.outputs.buildOrderJson)[0].projectsCount > 0
+    strategy:
+      matrix:
+        include: ${{ fromJson(needs.Initialization.outputs.buildOrderJson)[0].buildDimensions }}
+      fail-fast: false
+    name: Build ${{ matrix.projectName }} (${{ matrix.buildMode }})
+    uses: ./.github/workflows/_BuildALGoProject.yaml
+    secrets: inherit
+    with:
+      shell: ${{ matrix.githubRunnerShell }}
+      runsOn: ${{ matrix.githubRunner }}
+      project: ${{ matrix.project }}
+      projectName: ${{ matrix.projectName }}
+      buildMode: ${{ matrix.buildMode }}
+      skippedProjectsJson: ${{ needs.Initialization.outputs.skippedProjects }}
+      projectDependenciesJson: ${{ needs.Initialization.outputs.projectDependenciesJson }}
+      baselineWorkflowRunId: ${{ needs.Initialization.outputs.baselineWorkflowRunId }}
+      baselineWorkflowSHA: ${{ needs.Initialization.outputs.baselineWorkflowSHA }}
+      secrets: 'licenseFileUrl,codeSignCertificateUrl,*codeSignCertificatePassword,keyVaultCertificateUrl,*keyVaultCertificatePassword,keyVaultClientId,gitHubPackagesContext,applicationInsightsConnectionString'
+      signArtifacts: true
+      useArtifactCache: true
+      needsContext: ${{ toJson(needs) }}
+
+  Deploy:
+    needs: [ Initialization, Build ]
+    if: (!cancelled()) && needs.Build.result == 'success' && needs.Initialization.outputs.environmentCount > 0
+    # The fallback keeps the expression valid on build-only runs, where the environments step is skipped.
+    strategy: ${{ fromJson(needs.Initialization.outputs.environmentsMatrixJson || '{"matrix":{"include":[]},"fail-fast":false}') }}
     runs-on: ${{ fromJson(matrix.os) }}
     name: Deploy to ${{ matrix.environment }}
     defaults:
@@ -136,6 +196,13 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Download artifacts
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        env:
+          ACTIONS_RUNNER_DISABLE_NODE_MAGLEV: 1
+        with:
+          path: '.artifacts'
 
       - name: EnvName
         id: envName
@@ -157,14 +224,6 @@ jobs:
           shell: ${{ matrix.shell }}
           gitHubSecrets: ${{ toJson(secrets) }}
           getSecrets: '${{ steps.envName.outputs.envName }}-AuthContext,${{ steps.envName.outputs.envName }}_AuthContext,AuthContext'
-
-      - name: Get Artifacts for deployment
-        uses: microsoft/AL-Go-Actions/GetArtifactsForDeployment@v9.2
-        with:
-          shell: ${{ matrix.shell }}
-          artifactsVersion: ${{ github.event.inputs.appVersion }}
-          artifactsFolder: '.artifacts'
-          buildMode: ${{ matrix.buildMode }}
 
       # The inputs are passed through env, not pasted into the script, so text typed into the run form can't change the script.
       - name: Select apps to deploy
@@ -188,11 +247,10 @@ jobs:
           artifactsFolder: '.artifacts'
           type: 'Publish'
           deploymentEnvironmentsJson: ${{ steps.SelectApps.outputs.deploymentEnvironmentsJson }}
-          artifactsVersion: ${{ github.event.inputs.appVersion }}
 
   PostProcess:
-    needs: [ Initialization, Deploy ]
-    if: always()
+    needs: [ Initialization, Build, Deploy ]
+    if: (!cancelled())
     runs-on: [ windows-latest ]
     steps:
       - name: Checkout
