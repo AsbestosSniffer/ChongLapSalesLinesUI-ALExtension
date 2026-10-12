@@ -24,11 +24,13 @@ codeunit 50150 "Mix Match Engine"
         NoSetsTxt: Label 'None of the items on this document are in an active Mix & Match set.';
         CompetingSetsTxt: Label 'Some items are in more than one set that applies to this document (%1). Each was given to the set that gives the lowest total.', Comment = '%1 = comma-separated set codes';
         OverrideSummaryTxt: Label 'Goods subtotal %1 (LCY) is at or above %2, so set items get their set''s highest discount.', Comment = '%1 = goods subtotal, %2 = threshold';
+        FreeGoodsThresholdSummaryTxt: Label 'Goods subtotal %1 (LCY) is at or above %2, so the buyer gets free goods.', Comment = '%1 = goods subtotal, %2 = threshold';
         SetSummaryTxt: Label 'Set %1: %2 units', Comment = '%1 = set code, %2 = qualifying quantity';
         NoTierSummaryTxt: Label ', no tier reached';
         DiscountSummaryTxt: Label ', %1 discount', Comment = '%1 = discount percentage, such as 10%';
         OverrideDiscountSummaryTxt: Label ', %1 discount (subtotal override)', Comment = '%1 = discount percentage, such as 12%';
         FreeGoodsSummaryTxt: Label ', %1 x %2 free', Comment = '%1 = free quantity, %2 = item no.';
+        ThresholdFreeGoodsSummaryTxt: Label '%1 x %2 free (subtotal)', Comment = '%1 = free quantity, %2 = item no.';
         NotFreeGoodsLineErr: Label 'Select a Mix & Match free-goods line first.';
         RecalcNotificationMsg: Label 'Lines changed. Choose Apply Mix & Match to update Mix & Match discounts and free goods now. They are also updated automatically when the document is released or posted.';
 
@@ -74,6 +76,10 @@ codeunit 50150 "Mix Match Engine"
     begin
         if not SalesLine."MM Free Goods" then
             Error(NotFreeGoodsLineErr);
+        if SalesLine."MM Threshold Free Goods" then begin
+            ChangeThresholdFreeItem(SalesLine);
+            exit;
+        end;
         MixMatchSet.Get(SalesLine."MM Set Code");
 
         MixMatchSetItem.SetRange("Set Code", MixMatchSet."Code");
@@ -98,6 +104,33 @@ codeunit 50150 "Mix Match Engine"
         if SalesLine.Quantity <> FreeQty then
             SalesLine.Validate(Quantity, FreeQty);
         MakeLineFree(SalesLine, MixMatchSet."Code", SalesLine."MM Rule Line No.");
+        SalesLine."MM Free Item Chosen" := true;
+        SalesLine.Modify(true);
+    end;
+
+    // The subtotal free-goods line isn't tied to a set, so any item can be chosen. The choice is kept when
+    // Mix & Match is applied again.
+    local procedure ChangeThresholdFreeItem(var SalesLine: Record "Sales Line")
+    var
+        Item: Record Item;
+        FreeQty: Decimal;
+        UnitOfMeasureCode: Code[10];
+    begin
+        if Page.RunModal(Page::"Item Lookup", Item) <> Action::LookupOK then
+            exit;
+        if Item."No." = SalesLine."No." then
+            exit;
+
+        // Validating No. re-initialises the line; the Sales Line subscriber in Mix Match Subscribers keeps it a free-goods line.
+        FreeQty := SalesLine.Quantity;
+        SalesLine.Validate("No.", Item."No.");
+        UnitOfMeasureCode := GetThresholdFreeLineUnitOfMeasure(Item."No.");
+        if UnitOfMeasureCode <> '' then
+            SalesLine.Validate("Unit of Measure Code", UnitOfMeasureCode);
+        if SalesLine.Quantity <> FreeQty then
+            SalesLine.Validate(Quantity, FreeQty);
+        MakeLineFree(SalesLine, '', 0);
+        SalesLine."MM Threshold Free Goods" := true;
         SalesLine."MM Free Item Chosen" := true;
         SalesLine.Modify(true);
     end;
@@ -175,20 +208,30 @@ codeunit 50150 "Mix Match Engine"
         SetCode: Code[20];
         GoodsSubtotalLCY: Decimal;
         ThresholdLCY: Decimal;
+        FreeGoodsThresholdLCY: Decimal;
+        ThresholdFreeItemNo: Code[20];
+        ThresholdFreeQty: Decimal;
         OverrideOn: Boolean;
+        FreeGoodsOn: Boolean;
     begin
         if SalesHeader."MM Exclude" then
             AddSummaryLine(ExcludedTxt)
         else begin
             CollectSetLines(SalesHeader, TempSetLine, SetCodes);
+
+            // The subtotals are taken before any discount, so applying the discounts can't switch the thresholds off again.
+            GoodsSubtotalLCY := CalcGoodsSubtotalLCY(SalesHeader);
+            OverrideOn := IsBestDiscountOverrideOn(GoodsSubtotalLCY, ThresholdLCY);
+            if OverrideOn then
+                AddSummaryLine(StrSubstNo(OverrideSummaryTxt, Round(GoodsSubtotalLCY, 0.01), ThresholdLCY));
+            FreeGoodsOn := IsFreeGoodsThresholdOn(GoodsSubtotalLCY, FreeGoodsThresholdLCY);
+            if FreeGoodsOn then
+                AddSummaryLine(StrSubstNo(FreeGoodsThresholdSummaryTxt, Round(GoodsSubtotalLCY, 0.01), FreeGoodsThresholdLCY));
+
             if SetCodes.Count() = 0 then
                 AddSummaryLine(NoSetsTxt)
-            else begin
-                OverrideOn := IsBestDiscountOverrideOn(SalesHeader, GoodsSubtotalLCY, ThresholdLCY);
-                if OverrideOn then
-                    AddSummaryLine(StrSubstNo(OverrideSummaryTxt, Round(GoodsSubtotalLCY, 0.01), ThresholdLCY));
+            else
                 ResolveCompetingSets(SalesHeader, TempSetLine, SetCodes, OverrideOn);
-            end;
         end;
 
         foreach SetCode in SetCodes do begin
@@ -201,6 +244,12 @@ codeunit 50150 "Mix Match Engine"
 
         if CleanUpOrphanLines(SalesHeader, TempSetLine, SetCodes) then
             LinesChanged := true;
+
+        // The subtotal free-goods line is synced after the sets: it never counts toward them and must survive their cleanup.
+        if SyncThresholdFreeGoodsLine(SalesHeader, FreeGoodsOn, ThresholdFreeItemNo, ThresholdFreeQty) then
+            LinesChanged := true;
+        if ThresholdFreeItemNo <> '' then
+            AddSummaryLine(StrSubstNo(ThresholdFreeGoodsSummaryTxt, ThresholdFreeQty, ThresholdFreeItemNo));
     end;
 
     // Buffers the paid item lines that take part, grouped by the set their item belongs to. On the buffer,
@@ -497,16 +546,10 @@ codeunit 50150 "Mix Match Engine"
     end;
 
     // The goods subtotal is taken before any discount, so applying the discounts can't switch the override off again.
-    local procedure IsBestDiscountOverrideOn(SalesHeader: Record "Sales Header"; var GoodsSubtotalLCY: Decimal; var ThresholdLCY: Decimal): Boolean
+    local procedure CalcGoodsSubtotalLCY(SalesHeader: Record "Sales Header") GoodsSubtotalLCY: Decimal
     var
-        MixMatchSetup: Record "Mix Match Setup";
         SalesLine: Record "Sales Line";
     begin
-        GoodsSubtotalLCY := 0;
-        ThresholdLCY := MixMatchSetup.GetBestDiscountThreshold();
-        if ThresholdLCY <= 0 then
-            exit(false);
-
         SalesLine.SetRange("Document Type", SalesHeader."Document Type");
         SalesLine.SetRange("Document No.", SalesHeader."No.");
         SalesLine.SetRange(Type, SalesLine.Type::Item);
@@ -521,8 +564,33 @@ codeunit 50150 "Mix Match Engine"
         if SalesHeader."Currency Code" <> '' then
             if SalesHeader."Currency Factor" <> 0 then
                 GoodsSubtotalLCY := GoodsSubtotalLCY / SalesHeader."Currency Factor";
+    end;
 
+    local procedure IsBestDiscountOverrideOn(GoodsSubtotalLCY: Decimal; var ThresholdLCY: Decimal): Boolean
+    var
+        MixMatchSetup: Record "Mix Match Setup";
+    begin
+        ThresholdLCY := MixMatchSetup.GetBestDiscountThreshold();
+        if ThresholdLCY <= 0 then
+            exit(false);
         exit(GoodsSubtotalLCY >= ThresholdLCY);
+    end;
+
+    // True when the setup gives free goods on the goods subtotal and the subtotal reaches the configured threshold.
+    local procedure IsFreeGoodsThresholdOn(GoodsSubtotalLCY: Decimal; var FreeGoodsThresholdLCY: Decimal): Boolean
+    var
+        MixMatchSetup: Record "Mix Match Setup";
+        FreeGoodsItemNo: Code[20];
+        FreeGoodsQuantity: Decimal;
+    begin
+        MixMatchSetup.GetFreeGoodsSettings(FreeGoodsThresholdLCY, FreeGoodsItemNo, FreeGoodsQuantity);
+        if FreeGoodsThresholdLCY <= 0 then
+            exit(false);
+        if FreeGoodsItemNo = '' then
+            exit(false);
+        if FreeGoodsQuantity <= 0 then
+            exit(false);
+        exit(GoodsSubtotalLCY >= FreeGoodsThresholdLCY);
     end;
 
     local procedure ApplySet(SalesHeader: Record "Sales Header"; MixMatchSet: Record "Mix Match Set"; var TempSetLine: Record "Sales Line" temporary; OverrideOn: Boolean) LinesChanged: Boolean
@@ -723,6 +791,7 @@ codeunit 50150 "Mix Match Engine"
         SalesLine."MM Rule Line No." := 0;
         SalesLine."MM Free Goods" := false;
         SalesLine."MM Free Item Chosen" := false;
+        SalesLine."MM Threshold Free Goods" := false;
         SalesLine."MM Applied Disc. %" := 0;
         SalesLine."MM Std. Line Disc. %" := 0;
         SalesLine."MM Best Disc. Override" := false;
@@ -870,6 +939,126 @@ codeunit 50150 "Mix Match Engine"
         NoteTrackedLine(ItemNo);
     end;
 
+    // Keeps the document's one subtotal free-goods line (MM Threshold Free Goods, not tied to any set) in step with
+    // the Free Goods Subtotal (LCY) threshold in the setup. The item chosen on the document wins over the setup's
+    // default item. The line is removed when the threshold no longer applies or the setup no longer gives free goods.
+    local procedure SyncThresholdFreeGoodsLine(SalesHeader: Record "Sales Header"; FreeGoodsOn: Boolean; var FreeItemNo: Code[20]; var FreeQty: Decimal) Changed: Boolean
+    var
+        MixMatchSetup: Record "Mix Match Setup";
+        FreeLine: Record "Sales Line";
+        KeptFreeLine: Record "Sales Line";
+        ObsoleteLineNos: List of [Integer];
+        LineNo: Integer;
+        ItemNo: Code[20];
+        FreeGoodsThresholdLCY: Decimal;
+        IsFirstLine: Boolean;
+        KeepFirstLine: Boolean;
+    begin
+        FreeItemNo := '';
+        FreeQty := 0;
+        ItemNo := '';
+        if FreeGoodsOn then
+            MixMatchSetup.GetFreeGoodsSettings(FreeGoodsThresholdLCY, ItemNo, FreeQty);
+
+        FreeLine.SetRange("Document Type", SalesHeader."Document Type");
+        FreeLine.SetRange("Document No.", SalesHeader."No.");
+        FreeLine.SetRange("MM Free Goods", true);
+        FreeLine.SetRange("MM Threshold Free Goods", true);
+        IsFirstLine := true;
+        if FreeLine.FindSet() then
+            repeat
+                if IsFirstLine and FreeGoodsOn then begin
+                    // The item chosen on the document wins over the setup default.
+                    if FreeLine."MM Free Item Chosen" then
+                        ItemNo := FreeLine."No.";
+                    KeepFirstLine := (ItemNo <> '') and (FreeLine."No." = ItemNo);
+                end;
+                if IsFirstLine and KeepFirstLine then
+                    KeptFreeLine := FreeLine
+                else
+                    ObsoleteLineNos.Add(FreeLine."Line No.");
+                IsFirstLine := false;
+            until FreeLine.Next() = 0;
+
+        foreach LineNo in ObsoleteLineNos do begin
+            FreeLine.Get(SalesHeader."Document Type", SalesHeader."No.", LineNo);
+            NoteTrackedLine(FreeLine."No.");
+            FreeLine.Delete(true);
+            Changed := true;
+        end;
+
+        if (not FreeGoodsOn) or (ItemNo = '') or (FreeQty <= 0) then
+            exit;
+
+        FreeItemNo := ItemNo;
+        if KeepFirstLine then begin
+            if UpdateThresholdFreeGoodsLine(KeptFreeLine, ItemNo, FreeQty) then
+                Changed := true;
+            exit;
+        end;
+
+        InsertThresholdFreeGoodsLine(SalesHeader, ItemNo, FreeQty);
+        Changed := true;
+    end;
+
+    local procedure UpdateThresholdFreeGoodsLine(var FreeLine: Record "Sales Line"; ItemNo: Code[20]; FreeQty: Decimal) Changed: Boolean
+    var
+        UnitOfMeasureCode: Code[10];
+    begin
+        UnitOfMeasureCode := GetThresholdFreeLineUnitOfMeasure(ItemNo);
+        if (UnitOfMeasureCode <> '') and (FreeLine."Unit of Measure Code" <> UnitOfMeasureCode) then begin
+            FreeLine.Validate("Unit of Measure Code", UnitOfMeasureCode);
+            Changed := true;
+        end;
+        if FreeLine.Quantity <> FreeQty then begin
+            FreeLine.Validate(Quantity, FreeQty);
+            Changed := true;
+        end;
+        if Changed then
+            NoteTrackedLine(ItemNo);
+        if MakeLineFree(FreeLine, '', 0) then
+            Changed := true;
+        if not FreeLine."MM Threshold Free Goods" then begin
+            FreeLine."MM Threshold Free Goods" := true;
+            Changed := true;
+        end;
+        if Changed then
+            FreeLine.Modify(true);
+    end;
+
+    local procedure InsertThresholdFreeGoodsLine(SalesHeader: Record "Sales Header"; ItemNo: Code[20]; FreeQty: Decimal)
+    var
+        FreeLine: Record "Sales Line";
+        UnitOfMeasureCode: Code[10];
+    begin
+        FreeLine.Init();
+        FreeLine."Document Type" := SalesHeader."Document Type";
+        FreeLine."Document No." := SalesHeader."No.";
+        FreeLine."Line No." := GetNextLineNo(SalesHeader);
+        FreeLine.Insert(true);
+
+        FreeLine.Validate(Type, FreeLine.Type::Item);
+        FreeLine.Validate("No.", ItemNo);
+        UnitOfMeasureCode := GetThresholdFreeLineUnitOfMeasure(ItemNo);
+        if UnitOfMeasureCode <> '' then
+            FreeLine.Validate("Unit of Measure Code", UnitOfMeasureCode);
+        FreeLine.Validate(Quantity, FreeQty);
+        MakeLineFree(FreeLine, '', 0);
+        FreeLine."MM Threshold Free Goods" := true;
+        FreeLine.Modify(true);
+        NoteTrackedLine(ItemNo);
+    end;
+
+    // The subtotal free goods are counted in the free item's base unit of measure.
+    local procedure GetThresholdFreeLineUnitOfMeasure(ItemNo: Code[20]): Code[10]
+    var
+        Item: Record Item;
+    begin
+        Item.SetLoadFields("Base Unit of Measure");
+        Item.Get(ItemNo);
+        exit(Item."Base Unit of Measure");
+    end;
+
     // Validating quantity or unit of measure reprices the line, so the 100% discount is set last.
     local procedure MakeLineFree(var FreeLine: Record "Sales Line"; SetCode: Code[20]; RuleLineNo: Integer) Changed: Boolean
     begin
@@ -941,8 +1130,10 @@ codeunit 50150 "Mix Match Engine"
         if SalesLine.FindSet() then
             repeat
                 if SalesLine."MM Free Goods" then begin
-                    if not SetCodes.Contains(SalesLine."MM Set Code") then
-                        OrphanLineNos.Add(SalesLine."Line No.");
+                    // The subtotal free-goods line is kept in step by SyncThresholdFreeGoodsLine instead.
+                    if not SalesLine."MM Threshold Free Goods" then
+                        if not SetCodes.Contains(SalesLine."MM Set Code") then
+                            OrphanLineNos.Add(SalesLine."Line No.");
                 end else
                     if not TempSetLine.Get(SalesLine."Document Type", SalesLine."Document No.", SalesLine."Line No.") then
                         OrphanLineNos.Add(SalesLine."Line No.");

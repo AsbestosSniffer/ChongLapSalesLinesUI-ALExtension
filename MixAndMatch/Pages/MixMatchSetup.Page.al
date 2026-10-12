@@ -22,6 +22,20 @@ page 50154 "Mix Match Setup"
                 {
                 }
             }
+            group(FreeGoods)
+            {
+                Caption = 'Subtotal Free Goods';
+
+                field("Free Goods Threshold (LCY)"; Rec."Free Goods Threshold (LCY)")
+                {
+                }
+                field("Free Goods Item No."; Rec."Free Goods Item No.")
+                {
+                }
+                field("Free Goods Quantity"; Rec."Free Goods Quantity")
+                {
+                }
+            }
         }
     }
 

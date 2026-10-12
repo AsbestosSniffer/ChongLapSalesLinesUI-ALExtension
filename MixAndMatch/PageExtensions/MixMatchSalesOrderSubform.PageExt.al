@@ -63,7 +63,7 @@ pageextension 50154 "Mix Match Sales Order Subform" extends "Sales Order Subform
                 Caption = 'Change Free Item';
                 Enabled = Rec."MM Free Goods";
                 Image = Item;
-                ToolTip = 'Choose another item from the Mix & Match set for this free-goods line. The choice is kept when Mix & Match is applied again.';
+                ToolTip = 'Choose the item for this free-goods line: another item from the Mix & Match set for a set free-goods line, or any item for a subtotal free-goods line. The choice is kept when Mix & Match is applied again.';
 
                 trigger OnAction()
                 var

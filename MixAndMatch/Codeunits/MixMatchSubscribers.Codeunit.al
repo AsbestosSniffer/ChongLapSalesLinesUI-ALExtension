@@ -57,6 +57,7 @@ codeunit 50151 "Mix Match Subscribers"
         ToSalesLine."MM Set Code" := FromSalesLine."MM Set Code";
         ToSalesLine."MM Rule Line No." := FromSalesLine."MM Rule Line No.";
         ToSalesLine."MM Free Item Chosen" := FromSalesLine."MM Free Item Chosen";
+        ToSalesLine."MM Threshold Free Goods" := FromSalesLine."MM Threshold Free Goods";
     end;
 
     // Validating No. re-initialises the line, which clears the Mix & Match fields. Keep a free-goods line free when the
@@ -74,6 +75,19 @@ codeunit 50151 "Mix Match Subscribers"
             exit;
         if (Rec.Type <> Rec.Type::Item) or (Rec."No." = '') then
             exit;
+
+        if xRec."MM Threshold Free Goods" then begin
+            // Subtotal free-goods lines aren't tied to a set, so any item can be chosen.
+            Rec."MM Free Goods" := true;
+            Rec."MM Set Code" := '';
+            Rec."MM Rule Line No." := 0;
+            Rec."MM Threshold Free Goods" := true;
+            Rec."MM Applied Disc. %" := 100;
+            Rec."MM Free Item Chosen" := true;
+            if Rec."Line Discount %" <> 100 then
+                Rec.Validate("Line Discount %", 100);
+            exit;
+        end;
 
         if MixMatchSetItem.Get(xRec."MM Set Code", Rec."No.") then begin
             Rec."MM Free Goods" := true;

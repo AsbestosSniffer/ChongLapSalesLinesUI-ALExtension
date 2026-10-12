@@ -57,5 +57,12 @@ tableextension 50152 "Mix Match Sales Inv. Line" extends "Sales Invoice Line"
             Editable = false;
             ToolTip = 'Specifies that the line got its set''s highest discount because the goods subtotal reached the Mix & Match threshold.';
         }
+        field(50157; "MM Threshold Free Goods"; Boolean)
+        {
+            Caption = 'Mix & Match Subtotal Free Goods';
+            DataClassification = CustomerContent;
+            Editable = false;
+            ToolTip = 'Specifies that the line held free goods added because the goods subtotal reached the Mix & Match free goods threshold.';
+        }
     }
 }

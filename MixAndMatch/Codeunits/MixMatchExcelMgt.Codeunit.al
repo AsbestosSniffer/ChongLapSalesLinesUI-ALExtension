@@ -37,6 +37,9 @@ codeunit 50152 "Mix Match Excel Mgt."
         FreeQtyPerMultipleColTok: Label 'Free Qty. per Multiple', Locked = true;
         DefaultFreeItemNoColTok: Label 'Default Free Item No.', Locked = true;
         BestDiscThresholdColTok: Label 'Best Discount Subtotal (LCY)', Locked = true;
+        FreeGoodsThresholdColTok: Label 'Free Goods Subtotal (LCY)', Locked = true;
+        FreeGoodsItemColTok: Label 'Free Goods Item No.', Locked = true;
+        FreeGoodsQtyColTok: Label 'Free Goods Quantity', Locked = true;
         LcyCodeColTok: Label 'LCY Code', Locked = true;
         YesTok: Label 'Yes', Locked = true;
         NoTok: Label 'No', Locked = true;
@@ -52,6 +55,9 @@ codeunit 50152 "Mix Match Excel Mgt."
         AssignToTypeCommentTxt: Label 'All Customers, Customer, Customer Price Group, Customer Disc. Group, Campaign or Contact. Leave blank for All Customers.';
         AssignToNoCommentTxt: Label 'The customer, group, campaign or contact the set is assigned to. Leave blank for All Customers.';
         ReferenceOnlyCommentTxt: Label 'For reference only. Not imported.';
+        FreeGoodsThresholdCommentTxt: Label 'Leave blank for no subtotal free goods.';
+        FreeGoodsItemCommentTxt: Label 'Any item. Leave blank to give no subtotal free goods.';
+        FreeGoodsQtyCommentTxt: Label 'In the item''s base unit of measure.';
         TypeCommentTxt: Label 'Discount, Free Goods, or Discount and Free Goods.';
         YesNoCommentTxt: Label 'Yes or No.';
         FreeItemCommentTxt: Label 'Must be listed for the same set on the Items sheet. Leave blank to give the cheapest set item on the document.';
@@ -80,9 +86,11 @@ codeunit 50152 "Mix Match Excel Mgt."
         AssignToNoNotAllowedErr: Label 'Sheet %1, cell %2: Assign-to No. must be blank when Assign-to Type is All Customers.', Comment = '%1 = sheet name, %2 = cell reference';
         AssignToNoNotFoundErr: Label 'Sheet %1, cell %2: %3 %4 doesn''t exist in this company.', Comment = '%1 = sheet name, %2 = cell reference, %3 = assign-to type, %4 = assign-to no.';
         FreeItemNotInSetErr: Label 'Sheet %1, cell %2: default free item %3 isn''t listed for set %4 on the Items sheet.', Comment = '%1 = sheet name, %2 = cell reference, %3 = item no., %4 = set code';
-        ConfirmImportQst: Label 'Import %1 Mix & Match sets with %2 items and %3 tiers from %4?\\%5 of these sets already exist in this company and will be replaced, including their items and tiers. Sets that aren''t in the file stay as they are. Best Discount Subtotal (LCY) will be set to %6.%7\\If any part of the file can''t be imported, nothing is imported.', Comment = '%1 = number of sets, %2 = number of items, %3 = number of tiers, %4 = file name, %5 = number of sets that already exist, %6 = threshold amount, %7 = optional currency warning';
+        ConfirmImportQst: Label 'Import %1 Mix & Match sets with %2 items and %3 tiers from %4?\\%5 of these sets already exist in this company and will be replaced, including their items and tiers. Sets that aren''t in the file stay as they are. Best Discount Subtotal (LCY) will be set to %6. Free Goods Subtotal (LCY) will be set to %7 and give %8.%9\\If any part of the file can''t be imported, nothing is imported.', Comment = '%1 = number of sets, %2 = number of items, %3 = number of tiers, %4 = file name, %5 = number of sets that already exist, %6 = best discount threshold amount, %7 = free goods threshold amount, %8 = what the free goods give, %9 = optional currency warning';
         CurrencyWarningTxt: Label '\\Warning: the file was exported from a company whose local currency is %1, but this company''s local currency is %2.', Comment = '%1 = local currency code in the file, %2 = local currency code of this company';
-        ImportDoneMsg: Label 'Imported %1 Mix & Match sets (%2 new, %3 replaced) with %4 items and %5 tiers, and activated %6 of them. Best Discount Subtotal (LCY) is now %7.', Comment = '%1 = number of sets, %2 = new sets, %3 = replaced sets, %4 = items, %5 = tiers, %6 = activated sets, %7 = threshold amount';
+        ImportDoneMsg: Label 'Imported %1 Mix & Match sets (%2 new, %3 replaced) with %4 items and %5 tiers, and activated %6 of them. Best Discount Subtotal (LCY) is now %7 and Free Goods Subtotal (LCY) is %8.', Comment = '%1 = number of sets, %2 = new sets, %3 = replaced sets, %4 = items, %5 = tiers, %6 = activated sets, %7 = best discount threshold amount, %8 = free goods threshold amount';
+        FreeGoodsTxt: Label '%1 x %2 free', Comment = '%1 = free quantity, %2 = item no.';
+        NoFreeGoodsTxt: Label 'nothing';
 
     procedure ExportToExcel()
     var
@@ -132,6 +140,10 @@ codeunit 50152 "Mix Match Excel Mgt."
         CurrencyWarningText: Text;
         FileLcyCode: Code[10];
         BestDiscThreshold: Decimal;
+        FreeGoodsThresholdLCY: Decimal;
+        FreeGoodsItemNo: Code[20];
+        FreeGoodsQuantity: Decimal;
+        FreeGoodsSummaryText: Text;
         NewSetCount: Integer;
         ReplacedSetCount: Integer;
         ActivatedSetCount: Integer;
@@ -153,12 +165,16 @@ codeunit 50152 "Mix Match Excel Mgt."
         TempExcelBuffer.ReadSheetContinous(TiersSheetTok, false);
         ReadTiers(TempMixMatchSet, TempMixMatchSetItem, TempMixMatchRule);
         TempExcelBuffer.ReadSheetContinous(SetupSheetTok, false);
-        BestDiscThreshold := ReadSetup(FileLcyCode);
+        BestDiscThreshold := ReadSetup(FileLcyCode, FreeGoodsThresholdLCY, FreeGoodsItemNo, FreeGoodsQuantity);
         TempExcelBuffer.CloseBook();
 
         if GeneralLedgerSetup.Get() then
             if (FileLcyCode <> '') and (GeneralLedgerSetup."LCY Code" <> '') and (FileLcyCode <> GeneralLedgerSetup."LCY Code") then
                 CurrencyWarningText := StrSubstNo(CurrencyWarningTxt, FileLcyCode, GeneralLedgerSetup."LCY Code");
+        if (FreeGoodsItemNo <> '') and (FreeGoodsQuantity > 0) then
+            FreeGoodsSummaryText := StrSubstNo(FreeGoodsTxt, FreeGoodsQuantity, FreeGoodsItemNo)
+        else
+            FreeGoodsSummaryText := NoFreeGoodsTxt;
 
         TempMixMatchSet.Reset();
         TempMixMatchSetItem.Reset();
@@ -166,19 +182,19 @@ codeunit 50152 "Mix Match Excel Mgt."
         if not Confirm(
              ConfirmImportQst, false,
              TempMixMatchSet.Count(), TempMixMatchSetItem.Count(), TempMixMatchRule.Count(), FileName,
-             CountExistingSets(TempMixMatchSet), BestDiscThreshold, CurrencyWarningText)
+             CountExistingSets(TempMixMatchSet), BestDiscThreshold, FreeGoodsThresholdLCY, FreeGoodsSummaryText, CurrencyWarningText)
         then
             exit;
 
         // No commits from here on: an error while writing or activating rolls back the whole import.
         WriteSets(TempMixMatchSet, TempMixMatchSetItem, TempMixMatchRule, NewSetCount, ReplacedSetCount);
         ActivatedSetCount := ActivateSets(TempMixMatchSet);
-        WriteSetup(BestDiscThreshold);
+        WriteSetup(BestDiscThreshold, FreeGoodsThresholdLCY, FreeGoodsItemNo, FreeGoodsQuantity);
 
         TempMixMatchSet.Reset();
         Message(
           ImportDoneMsg, TempMixMatchSet.Count(), NewSetCount, ReplacedSetCount,
-          TempMixMatchSetItem.Count(), TempMixMatchRule.Count(), ActivatedSetCount, BestDiscThreshold);
+          TempMixMatchSetItem.Count(), TempMixMatchRule.Count(), ActivatedSetCount, BestDiscThreshold, FreeGoodsThresholdLCY);
     end;
 
     local procedure StartSheet()
@@ -266,15 +282,25 @@ codeunit 50152 "Mix Match Excel Mgt."
     var
         MixMatchSetup: Record "Mix Match Setup";
         GeneralLedgerSetup: Record "General Ledger Setup";
+        FreeGoodsThresholdLCY: Decimal;
+        FreeGoodsItemNo: Code[20];
+        FreeGoodsQuantity: Decimal;
     begin
         TempExcelBuffer.NewRow();
         AddHeaderCell(BestDiscThresholdColTok, '');
         AddHeaderCell(LcyCodeColTok, ReferenceOnlyCommentTxt);
+        AddHeaderCell(FreeGoodsThresholdColTok, FreeGoodsThresholdCommentTxt);
+        AddHeaderCell(FreeGoodsItemColTok, FreeGoodsItemCommentTxt);
+        AddHeaderCell(FreeGoodsQtyColTok, FreeGoodsQtyCommentTxt);
 
         if GeneralLedgerSetup.Get() then;
+        MixMatchSetup.GetFreeGoodsSettings(FreeGoodsThresholdLCY, FreeGoodsItemNo, FreeGoodsQuantity);
         TempExcelBuffer.NewRow();
         AddNumberCell(MixMatchSetup.GetBestDiscountThreshold());
         AddTextCell(GeneralLedgerSetup."LCY Code");
+        AddNumberCell(FreeGoodsThresholdLCY);
+        AddTextCell(FreeGoodsItemNo);
+        AddNumberCell(FreeGoodsQuantity);
     end;
 
     local procedure AddHeaderCell(Heading: Text; CommentText: Text)
@@ -463,11 +489,29 @@ codeunit 50152 "Mix Match Excel Mgt."
             end;
     end;
 
-    local procedure ReadSetup(var FileLcyCode: Code[10]): Decimal
+    local procedure ReadSetup(var FileLcyCode: Code[10]; var FreeGoodsThresholdLCY: Decimal; var FreeGoodsItemNo: Code[20]; var FreeGoodsQuantity: Decimal) BestDiscThreshold: Decimal
+    var
+        Item: Record Item;
+        MixMatchSetup: Record "Mix Match Setup";
+        HasFreeGoodsColumns: Boolean;
     begin
         CheckHeaderCell(SetupSheetTok, 1, BestDiscThresholdColTok);
         FileLcyCode := CopyStr(GetCodeValue(SetupSheetTok, 2, 2, LcyCodeColTok, MaxStrLen(FileLcyCode), false), 1, MaxStrLen(FileLcyCode));
-        exit(GetDecimalValue(SetupSheetTok, 2, 1, BestDiscThresholdColTok, true));
+        BestDiscThreshold := GetDecimalValue(SetupSheetTok, 2, 1, BestDiscThresholdColTok, true);
+
+        // Workbooks exported before the subtotal free goods existed have no Free Goods columns.
+        HasFreeGoodsColumns := GetCellText(1, 3) <> '';
+        if HasFreeGoodsColumns then begin
+            CheckHeaderCell(SetupSheetTok, 3, FreeGoodsThresholdColTok);
+            CheckHeaderCell(SetupSheetTok, 4, FreeGoodsItemColTok);
+            CheckHeaderCell(SetupSheetTok, 5, FreeGoodsQtyColTok);
+            FreeGoodsThresholdLCY := GetDecimalValue(SetupSheetTok, 2, 3, FreeGoodsThresholdColTok, false);
+            FreeGoodsItemNo := CopyStr(GetCodeValue(SetupSheetTok, 2, 4, FreeGoodsItemColTok, MaxStrLen(MixMatchSetup."Free Goods Item No."), false), 1, MaxStrLen(MixMatchSetup."Free Goods Item No."));
+            FreeGoodsQuantity := GetDecimalValue(SetupSheetTok, 2, 5, FreeGoodsQtyColTok, false);
+            if FreeGoodsItemNo <> '' then
+                if not Item.Get(FreeGoodsItemNo) then
+                    Error(ItemNotFoundErr, SetupSheetTok, GetCellReference(2, 4), FreeGoodsItemNo);
+        end;
     end;
 
     local procedure GetNextTierLineNo(var TempMixMatchRule: Record "Mix Match Rule" temporary; SetCode: Code[20]) LineNo: Integer
@@ -574,7 +618,7 @@ codeunit 50152 "Mix Match Excel Mgt."
         TempMixMatchSet.Reset();
     end;
 
-    local procedure WriteSetup(BestDiscThreshold: Decimal)
+    local procedure WriteSetup(BestDiscThreshold: Decimal; FreeGoodsThresholdLCY: Decimal; FreeGoodsItemNo: Code[20]; FreeGoodsQuantity: Decimal)
     var
         MixMatchSetup: Record "Mix Match Setup";
     begin
@@ -583,6 +627,10 @@ codeunit 50152 "Mix Match Excel Mgt."
             MixMatchSetup.Insert(true);
         end;
         MixMatchSetup.Validate("Best Disc. Threshold (LCY)", BestDiscThreshold);
+        // The item is validated before the quantity and the threshold, which check that the item is set.
+        MixMatchSetup.Validate("Free Goods Item No.", FreeGoodsItemNo);
+        MixMatchSetup.Validate("Free Goods Quantity", FreeGoodsQuantity);
+        MixMatchSetup.Validate("Free Goods Threshold (LCY)", FreeGoodsThresholdLCY);
         MixMatchSetup.Modify(true);
     end;
 
