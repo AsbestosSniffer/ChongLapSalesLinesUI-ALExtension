@@ -161,7 +161,12 @@ jobs:
                   $tokens += $property.Name.Substring(4)
               }
           }
-          foreach ($token in @($inputs.otherApps -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
+          $otherApps = ''
+          $otherAppsProperty = $inputs.PSObject.Properties['otherApps']
+          if ($null -ne $otherAppsProperty -and $null -ne $otherAppsProperty.Value) {
+              $otherApps = [string] $otherAppsProperty.Value
+          }
+          foreach ($token in @($otherApps -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })) {
               $tokens += $token
           }
           $tokens = @($tokens | Select-Object -Unique)
