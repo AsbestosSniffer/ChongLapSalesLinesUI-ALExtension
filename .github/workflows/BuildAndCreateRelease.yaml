@@ -1,7 +1,7 @@
 # Custom workflow (not part of AL-Go for GitHub, so Update AL-Go System Files leaves it alone).
-# Builds ONLY the apps chosen in the run and creates a GitHub release for exactly those apps, in one run.
-# The build reuses AL-Go's own _BuildALGoProject.yaml, called the same way CI/CD calls it. The release contains
-# the compiled .app files of the chosen apps, not the other apps in the repository.
+# Builds the AL-Go projects containing the chosen apps and creates a GitHub release for exactly those apps, in one run.
+# A project can contain multiple apps, so the build may compile additional apps; the release includes only the
+# selected apps' compiled .app files.
 #
 # Apps are chosen with the checkboxes (or with folder names in otherApps). Tick none and leave otherApps empty to
 # build and release every app. When you add an app to the repository, add a checkbox for it here, named
@@ -142,7 +142,7 @@ jobs:
           shell: powershell
           maxBuildDepth: ${{ env.workflowDepth }}
 
-      # Keeps only the chosen apps (plus anything they depend on inside this repository) in AL-Go's build matrix.
+      # Keeps only the AL-Go projects containing the chosen apps (plus their project dependencies) in the build matrix.
       # The inputs are passed through env, not pasted into the script, so text typed into the run form can't change the script.
       - name: Select projects to build
         id: SelectProjects
@@ -198,7 +198,7 @@ jobs:
               $selectedApps = @($repoApps)
           }
 
-          # Apps that the chosen apps depend on inside this repository must also be built (but are not released).
+          # Projects that the chosen apps depend on inside this repository must also be built (but are not released).
           $projectDependencies = $env:ProjectDependenciesJson | ConvertFrom-Json
           $dependencyNames = @($projectDependencies | Get-Member -MemberType NoteProperty | ForEach-Object { $_.Name })
           $buildFolders = @($selectedApps | ForEach-Object { $_.Folder })
@@ -222,11 +222,17 @@ jobs:
           if (@($buildOrder).Count -eq 0) {
               throw "AL-Go found no projects to build in this repository."
           }
-          $kept = @($buildOrder[0].buildDimensions | Where-Object { $buildFolders -contains $_.project })
+          $kept = @($buildOrder[0].buildDimensions | Where-Object {
+                  ($buildFolders -contains $_.project) -or
+                  (($_.project -eq '.') -and ($selectedApps.Count -gt 0))
+              })
           $keptProjects = @($kept | ForEach-Object { $_.project })
-          $missing = @($buildFolders | Where-Object { $_ -notin $keptProjects })
+          $missing = @($buildFolders | Where-Object {
+                  ($_ -notin $keptProjects) -and
+                  -not ($keptProjects -contains '.' -and ($repoApps.Folder -contains $_))
+              })
           if ($missing.Count -gt 0) {
-              throw "These apps are not part of the build AL-Go determined for this run: $($missing -join ', '). Run the CI/CD workflow once and try again."
+              throw "These apps are not part of a build project AL-Go determined for this run: $($missing -join ', '). Run the CI/CD workflow once and try again."
           }
 
           $filteredBuildOrder = @(@{ projectsCount = $kept.Count; buildDimensions = @($kept) })
@@ -273,8 +279,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      # Only the Apps artifacts were built and only the chosen apps (plus their repository dependencies) were built.
-      # '*-Apps-*' matches the compiled-app artifacts but not TestApps or Dependencies.
+      # '*-Apps-*' matches compiled-app artifacts but not TestApps or Dependencies. A selected project may compile
+      # additional apps; Collect release assets below keeps only the apps selected in this run.
       - name: Download artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         env:
@@ -284,8 +290,8 @@ jobs:
           merge-multiple: true
           path: '.artifacts'
 
-      # Picks the .app files of the chosen apps out of the downloaded build (matched by app ID, so apps built only
-      # as dependencies are not released) and checks the release tag before anything is created.
+      # Picks the .app files of the chosen apps out of the downloaded build (matched by app ID, so other apps built
+      # in the same project and apps built only as dependencies are not released) and checks the release tag.
       - name: Collect release assets
         id: CollectAssets
         env:
