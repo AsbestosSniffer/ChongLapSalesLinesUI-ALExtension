@@ -199,7 +199,7 @@ codeunit 50152 "Mix Match Excel Mgt."
 
     local procedure StartSheet()
     begin
-        TempExcelBuffer.Reset();
+        // Reset() also clears Excel Buffer's workbook writer variable.
         TempExcelBuffer.DeleteAll();
         TempExcelBuffer.ClearNewRow();
     end;
@@ -645,7 +645,6 @@ codeunit 50152 "Mix Match Excel Mgt."
 
     local procedure GetLastRowNo(): Integer
     begin
-        TempExcelBuffer.Reset();
         if TempExcelBuffer.FindLast() then
             exit(TempExcelBuffer."Row No.");
         exit(0);
