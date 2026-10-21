@@ -382,8 +382,7 @@ jobs:
           Write-Host "Release assets:"
           $assets | ForEach-Object { Write-Host "- $($_.assetName)" }
 
-      # A single archive of the chosen apps, convenient for downloading the release and installing the apps manually
-      # (the individual .app files are also attached to the release).
+      # GitHub does not allow .app release assets, so distribute the selected app files in a ZIP archive.
       - name: Zip release apps
         id: ZipApps
         env:
@@ -410,7 +409,7 @@ jobs:
           Add-Content -Encoding UTF8 -Path $env:GITHUB_OUTPUT -Value "zipName=$zipName"
           Write-Host "Created $zipPath"
 
-      - name: Create release and upload apps
+      - name: Create release and upload app archive
         id: CreateRelease
         uses: actions/github-script@3a2844b7e9c422d3c10d287c895573f7108da1b3 # v9.0.0
         env:
@@ -431,13 +430,10 @@ jobs:
             for (const asset of sorted) {
               lines.push(`- ${asset.name} \`${asset.version}\``);
             }
-            lines.push('');
-            if (process.env.ZipPath && fs.existsSync(process.env.ZipPath)) {
-              lines.push(`Download \`${process.env.ZipName}\` for a single archive of the apps above.`);
+            if (!process.env.ZipPath || !fs.existsSync(process.env.ZipPath)) {
+              throw new Error('The ZIP archive of selected apps is missing.');
             }
-            else {
-              lines.push('Download the .app files attached below.');
-            }
+            lines.push('', `Download \`${process.env.ZipName}\` and extract it to access the .app files.`);
             lines.push('', `Built from commit ${context.sha} on the \`${context.ref.replace('refs/heads/', '')}\` branch.`);
             const body = lines.join('\n');
 
@@ -456,35 +452,28 @@ jobs:
             core.setOutput('releaseId', releaseId);
             core.setOutput('releaseUrl', createReleaseResponse.data.html_url);
 
-            const uploads = assets.map((asset) => ({ path: asset.path, name: asset.assetName }));
-            if (process.env.ZipPath && fs.existsSync(process.env.ZipPath)) {
-              uploads.push({ path: process.env.ZipPath, name: process.env.ZipName });
-            }
-
-            async function uploadWithRetry(upload) {
+            async function uploadZipWithRetry() {
               for (let attempt = 1; attempt <= 3; attempt++) {
                 try {
                   await github.rest.repos.uploadReleaseAsset({
                     owner: context.repo.owner,
                     repo: context.repo.repo,
                     release_id: releaseId,
-                    name: upload.name,
-                    data: fs.readFileSync(upload.path)
+                    name: process.env.ZipName,
+                    data: fs.readFileSync(process.env.ZipPath)
                   });
                   return;
                 } catch (error) {
                   if (attempt == 3) {
                     throw error;
                   }
-                  core.warning(`Upload of ${upload.name} failed (attempt ${attempt}), retrying...`);
+                  core.warning(`Upload of ${process.env.ZipName} failed (attempt ${attempt}), retrying...`);
                   await new Promise((resolve) => setTimeout(resolve, 2000));
                 }
               }
             }
 
-            for (const upload of uploads) {
-              await uploadWithRetry(upload);
-            }
+            await uploadZipWithRetry();
 
   PostProcess:
     needs: [ Initialization, Build, CreateRelease ]
