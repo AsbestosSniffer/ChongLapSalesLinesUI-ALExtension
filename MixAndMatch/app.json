@@ -2,7 +2,7 @@
   "id": "4dc1b4e7-3a95-4f5f-b36c-566f1ea58cbf",
   "name": "MixAndMatch",
   "publisher": "Default Publisher",
-  "version": "1.0.0.0",
+  "version": "1.0.20261014.0",
   "brief": "Mix & Match promotions on sales quotes, orders and invoices.",
   "description": "Tiered product-set promotions (discount, free goods, or both) with a subtotal-based best-discount override. Applied on demand and automatically when a sales document is released or posted.",
   "privacyStatement": "",
