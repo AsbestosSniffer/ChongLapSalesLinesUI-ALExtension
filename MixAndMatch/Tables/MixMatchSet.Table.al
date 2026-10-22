@@ -65,6 +65,7 @@ table 50150 "Mix Match Set"
         field(6; Active; Boolean)
         {
             Caption = 'Active';
+            InitValue = false;
             Editable = false;
             ToolTip = 'Specifies whether the set is applied to sales documents. Use the Activate and Deactivate actions to change it.';
         }
