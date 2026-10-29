@@ -1,295 +1,388 @@
 codeunit 50111 ReserveEntriesHelper
 {
-    procedure DeleteReserveEntries(CurrentSalesLine: Record "Sales Line")
-    var
-        SalesLine: Record "Sales Line";
-    begin
-        SalesLine.SetRange("Document Type", CurrentSalesLine."Document Type");
-        SalesLine.SetRange("Document No.", CurrentSalesLine."Document No.");
-        if SalesLine.FindSet() then begin
-            repeat
-                DeleteReservationEntriesForLine(SalesLine);
-            until SalesLine.Next() = 0;
-        end;
-    end;
-
-    local procedure DeleteReservationEntriesForLine(var SalesLine: Record "Sales Line")
-    var
-        DemandEntry: Record "Reservation Entry";
-        SupplyEntry: Record "Reservation Entry";
-    begin
-        // Entries for the Sales Line side were created with Positive = false.
-        DemandEntry.SetSourceFilter(
-            Database::"Sales Line",
-            SalesLine."Document Type".AsInteger(),
-            SalesLine."Document No.",
-            SalesLine."Line No.",
-            false);
-
-        if DemandEntry.FindSet() then
-            repeat
-                // Remove the linked supply-side entry (Source Type = Item Ledger Entry, Positive = true)
-                // so it doesn't stay behind and falsely tie up inventory.
-                SupplyEntry.Reset();
-                SupplyEntry.SetRange("Source Type", Database::"Item Ledger Entry");
-                SupplyEntry.SetRange(Positive, true);
-                SupplyEntry.SetRange("Item No.", DemandEntry."Item No.");
-                SupplyEntry.SetRange("Variant Code", DemandEntry."Variant Code");
-                SupplyEntry.SetRange("Location Code", DemandEntry."Location Code");
-                SupplyEntry.SetRange("Lot No.", DemandEntry."Lot No.");
-                SupplyEntry.SetRange("Quantity (Base)", DemandEntry."Quantity (Base)");
-                if SupplyEntry.FindFirst() then
-                    SupplyEntry.Delete();
-            until DemandEntry.Next() = 0;
-
-        DemandEntry.DeleteAll();
-    end;
-
     procedure CreateReserveEntries(CurrentSalesLine: Record "Sales Line")
     var
-        DetailText: Text;
+        Details: Text;
     begin
-        DetailText := AssignFefoLotsWithDetails(CurrentSalesLine);
-        if DetailText <> '' then
-            Message('FEFO lot assignment results:%1', DetailText)
+        Details := AssignDocument(CurrentSalesLine, true);
+        if Details = '' then
+            Message('No lot-tracked item lines found on this document.')
         else
-            Message('No lot-tracked item lines found on this document.');
+            Message('FEFO lot assignment results (quantities in base units):%1', Details);
     end;
 
-    // Same as CreateReserveEntries, but returns only shortage details instead of showing a Message,
-    // so callers that process many documents (e.g. a bulk action) can show one summary at the end.
+    // Bulk callers receive shortages AND skips, without per-document dialogs.
     procedure AssignFefoLots(CurrentSalesLine: Record "Sales Line"): Text
+    begin
+        exit(AssignDocument(CurrentSalesLine, false));
+    end;
+
+    local procedure AssignDocument(CurrentSalesLine: Record "Sales Line"; IncludeSuccess: Boolean): Text
     var
         SalesLine: Record "Sales Line";
+        Details: Text;
         StatusText: Text;
-        ShortageText: Text;
         QtyShort: Decimal;
+        Skipped: Boolean;
     begin
-        SalesLine.SetRange("Document Type", CurrentSalesLine."Document Type");
-        SalesLine.SetRange("Document No.", CurrentSalesLine."Document No.");
+        SetDocumentFilter(SalesLine, CurrentSalesLine);
         if SalesLine.FindSet() then
             repeat
-                QtyShort := CreateReservationEntriesForLine(SalesLine, StatusText);
-                if QtyShort > 0 then
-                    ShortageText += StrSubstNo('\Line %1 (%2): %3 unit(s) could not be reserved.', SalesLine."Line No.", SalesLine."No.", QtyShort);
+                QtyShort := AssignFefoLotsToLine(SalesLine, StatusText, Skipped);
+                if (StatusText <> '') and (IncludeSuccess or Skipped or (QtyShort > 0)) then
+                    Details += '\' + StatusText;
             until SalesLine.Next() = 0;
-
-        exit(ShortageText);
+        exit(Details);
     end;
 
-    // Same as AssignFefoLots, but returns a status line for every lot-tracked item line
-    // (success or failure), so the single-document button can show what actually happened.
-    local procedure AssignFefoLotsWithDetails(CurrentSalesLine: Record "Sales Line"): Text
+    // Single-line entry point shared by the quantity and Shopify subscribers.
+    procedure AssignFefoLotsToLine(var SalesLine: Record "Sales Line"; var StatusText: Text; var Skipped: Boolean): Decimal
     var
-        SalesLine: Record "Sales Line";
-        StatusText: Text;
-        DetailText: Text;
-    begin
-        SalesLine.SetRange("Document Type", CurrentSalesLine."Document Type");
-        SalesLine.SetRange("Document No.", CurrentSalesLine."Document No.");
-        if SalesLine.FindSet() then
-            repeat
-                CreateReservationEntriesForLine(SalesLine, StatusText);
-                if StatusText <> '' then
-                    DetailText += '\' + StatusText;
-            until SalesLine.Next() = 0;
-
-        exit(DetailText);
-    end;
-
-    // Diagnostic helper: reports what tracking info is actually present on the most recent
-    // open Item Ledger Entry for this item/location/variant, so we can tell whether
-    // inventory is identified by Lot No., Serial No., or Package No.
-    local procedure DescribeSampleLedgerEntry(SalesLine: Record "Sales Line"): Text
-    var
-        ItemLedgerEntry: Record "Item Ledger Entry";
-    begin
-        ItemLedgerEntry.SetRange("Item No.", SalesLine."No.");
-        ItemLedgerEntry.SetRange("Location Code", SalesLine."Location Code");
-        ItemLedgerEntry.SetRange("Variant Code", SalesLine."Variant Code");
-        ItemLedgerEntry.SetFilter("Remaining Quantity", '>0');
-        ItemLedgerEntry.SetRange(Open, true);
-
-        if not ItemLedgerEntry.FindFirst() then
-            exit(StrSubstNo('No open Item Ledger Entries found for Location ''%1'', Variant ''%2''.', SalesLine."Location Code", SalesLine."Variant Code"));
-
-        exit(StrSubstNo('Sample open entry - Lot No.=''%1'', Serial No.=''%2'', Package No.=''%3'', Expiration Date=%4, Remaining Qty=%5.',
-            ItemLedgerEntry."Lot No.", ItemLedgerEntry."Serial No.", ItemLedgerEntry."Package No.", ItemLedgerEntry."Expiration Date", ItemLedgerEntry."Remaining Quantity"));
-    end;
-
-    local procedure CreateReservationEntriesForLine(var SalesLine: Record "Sales Line"; var StatusText: Text): Decimal
-    var
-        ReservationEntry: Record "Reservation Entry";
-        ItemLedgerEntry: Record "Item Ledger Entry";
         Item: Record Item;
         ItemTrackingCode: Record "Item Tracking Code";
-        QtyLeftToReserve: Decimal;
-        QtyInCurrentLedgerEntry: Decimal;
-        NextReservationEntryNo: Integer;
-        EntriesCreated: Integer;
-        UsedEntryNos: List of [Integer];
+        ReservationEntry: Record "Reservation Entry";
+        ItemLedgerEntry: Record "Item Ledger Entry";
+        TempSummary: Record "Entry Summary" temporary;
+        BestSummary: Record "Entry Summary" temporary;
+        Reason: Text;
+        QtyLeft: Decimal;
+        QtyAssigned: Decimal;
+        LotCount: Integer;
     begin
-        StatusText := '';
+        Clear(StatusText);
+        Skipped := false;
+        if not IsLotTrackedItem(SalesLine, Item, ItemTrackingCode) then
+            exit(0);
 
-        // Lines that aren't actual item lines (comments, G/L accounts, etc.) are
-        // skipped silently - they're not relevant to FEFO lot assignment.
-        if SalesLine.Type <> SalesLine.Type::Item then
-            exit;
-
-        if SalesLine."No." = '' then
-            exit;
-
-        if not Item.Get(SalesLine."No.") then begin
-            StatusText := StrSubstNo('Line %1: item ''%2'' not found.', SalesLine."Line No.", SalesLine."No.");
-            exit;
-        end;
-
-        // Must run before filtering Item Ledger Entries, otherwise the FEFO search
-        // and the resulting Reservation Entries use a different location than the line ends up with.
-        SetLocationCode(SalesLine);
-
-        if not ItemTrackingCode.Get(Item."Item Tracking Code") then begin
-            StatusText := StrSubstNo('Line %1 (%2): item is not set up for lot tracking (Item Tracking Code = ''%3'').', SalesLine."Line No.", SalesLine."No.", Item."Item Tracking Code");
-            exit;
-        end;
-
-        // Some tracking codes (e.g. this company's "LOTEXP") have "Lot Specific Tracking" = No
-        // but still identify inventory by Lot No. with expiration dates, so accept either flag.
-        if not (ItemTrackingCode."Lot Specific Tracking" or ItemTrackingCode."Use Expiration Dates") then begin
-            StatusText := StrSubstNo(
-                'Line %1 (%2): item tracking code ''%3'' does not use lot or expiration-date tracking (SN Specific Tracking=%4, Package Specific Tracking=%5). %6',
-                SalesLine."Line No.", SalesLine."No.", Item."Item Tracking Code",
-                ItemTrackingCode."SN Specific Tracking", ItemTrackingCode."Package Specific Tracking",
-                DescribeSampleLedgerEntry(SalesLine));
-            exit;
-        end;
-
-        QtyLeftToReserve := SalesLine."Quantity (Base)";
-
-        DeleteReservationEntriesForLine(SalesLine);
-
+        // Serialize this service's allocations for the same item, even when there
+        // are no reservation entries yet. No commits within a document.
+        Item.LockTable();
+        Item.Get(SalesLine."No.");
         ReservationEntry.LockTable();
-        if ReservationEntry.FindLast() then
-            NextReservationEntryNo := ReservationEntry."Entry No."
-        else
-            NextReservationEntryNo := 0;
+        ItemLedgerEntry.LockTable();
 
-        while (QtyLeftToReserve > 0) and FindNextFefoLedgerEntry(SalesLine, UsedEntryNos, ItemLedgerEntry) do begin
-            UsedEntryNos.Add(ItemLedgerEntry."Entry No.");
-            EntriesCreated += 1;
-
-            ReservationEntry.Reset();
-            NextReservationEntryNo += 1;
-            ReservationEntry.Init();
-            ReservationEntry."Entry No." := NextReservationEntryNo;
-            ReservationEntry."Item No." := SalesLine."No.";
-            ReservationEntry."Lot No." := ItemLedgerEntry."Lot No.";
-
-            // Mandatory fields
-            ReservationEntry."Location Code" := SalesLine."Location Code";
-            ReservationEntry."Variant Code" := SalesLine."Variant Code";
-
-            QtyInCurrentLedgerEntry := ItemLedgerEntry."Remaining Quantity";
-            if QtyLeftToReserve <= QtyInCurrentLedgerEntry then begin
-                ReservationEntry."Quantity (Base)" := -QtyLeftToReserve;
-                ReservationEntry."Qty. to Handle (Base)" := -QtyLeftToReserve;
-                ReservationEntry."Qty. to Invoice (Base)" := -QtyLeftToReserve;
-                QtyLeftToReserve := 0;
-            end else begin
-                ReservationEntry."Quantity (Base)" := -QtyInCurrentLedgerEntry;
-                ReservationEntry."Qty. to Handle (Base)" := -QtyInCurrentLedgerEntry;
-                ReservationEntry."Qty. to Invoice (Base)" := -QtyInCurrentLedgerEntry;
-                QtyLeftToReserve -= QtyInCurrentLedgerEntry;
-            end;
-
-            ReservationEntry."Source Type" := Database::"Sales Line";
-            ReservationEntry."Source Subtype" := SalesLine."Document Type".AsInteger();
-            ReservationEntry."Source ID" := SalesLine."Document No.";
-            ReservationEntry."Source Ref. No." := SalesLine."Line No.";
-            ReservationEntry.Positive := false;
-            ReservationEntry.Insert();
-
-            ReservationEntry."Source Type" := Database::"Item Ledger Entry";
-            ReservationEntry."Source Subtype" := ItemLedgerEntry."Document Type".AsInteger();
-            ReservationEntry."Source ID" := ItemLedgerEntry."Document No.";
-            ReservationEntry."Source Ref. No." := ItemLedgerEntry."Entry No.";
-            ReservationEntry.Positive := true;
-            ReservationEntry.Insert();
+        Reason := GetLineProtectionReason(SalesLine, ItemTrackingCode);
+        if Reason = '' then
+            Reason := GetInventoryAuditReason(SalesLine);
+        if Reason <> '' then begin
+            Skipped := true;
+            StatusText := StrSubstNo('Line %1 (%2): skipped - %3', SalesLine."Line No.", SalesLine."No.", Reason);
+            exit(0);
         end;
 
-        if EntriesCreated = 0 then
-            StatusText := StrSubstNo('Line %1 (%2): no available lot-tracked inventory found for Location ''%3'', Variant ''%4''.', SalesLine."Line No.", SalesLine."No.", SalesLine."Location Code", SalesLine."Variant Code")
-        else if QtyLeftToReserve > 0 then
-            StatusText := StrSubstNo('Line %1 (%2): reserved %3 of %4 unit(s) across %5 lot(s); %6 unit(s) short.', SalesLine."Line No.", SalesLine."No.", SalesLine."Quantity (Base)" - QtyLeftToReserve, SalesLine."Quantity (Base)", EntriesCreated, QtyLeftToReserve)
-        else
-            StatusText := StrSubstNo('Line %1 (%2): reserved %3 unit(s) across %4 lot(s).', SalesLine."Line No.", SalesLine."No.", SalesLine."Quantity (Base)", EntriesCreated);
+        SalesLine.TestField("Qty. per Unit of Measure");
+        SalesLine.TestField("Document No.");
+        SalesLine.TestField("Line No.");
+        DeleteTrackingForLine(SalesLine);
+        LoadAvailability(SalesLine, ItemTrackingCode, TempSummary);
+        QtyLeft := SalesLine."Outstanding Qty. (Base)";
 
-        exit(QtyLeftToReserve);
+        while (QtyLeft > 0) and FindNextLot(SalesLine, TempSummary, BestSummary, ItemTrackingCode, GetPostingDate(SalesLine)) do begin
+            QtyAssigned := MinQty(QtyLeft, BestSummary."Total Available Quantity");
+            CreateLotTracking(SalesLine, BestSummary, QtyAssigned);
+            QtyLeft -= QtyAssigned;
+            LotCount += 1;
+            // A summary aggregates receipts for a lot; consume it only once.
+            TempSummary.Get(BestSummary."Entry No.");
+            TempSummary.Delete();
+        end;
+
+        StatusText := StrSubstNo('Line %1 (%2): assigned %3 of %4 base unit(s) across %5 lot(s).',
+            SalesLine."Line No.", SalesLine."No.", SalesLine."Outstanding Qty. (Base)" - QtyLeft,
+            SalesLine."Outstanding Qty. (Base)", LotCount);
+        if QtyLeft > 0 then
+            StatusText += StrSubstNo(' %1 base unit(s) short.', QtyLeft);
+        exit(QtyLeft);
     end;
 
-    // Picks the open Item Ledger Entry (not already used for this line) with the earliest
-    // Expiration Date, falling back to Lot No. then Entry No. as tie-breakers. Entries with
-    // no Expiration Date are treated as expiring last. Avoids SetCurrentKey/SetAscending on
-    // "Expiration Date", which is not part of any key on Item Ledger Entry and would error.
-    local procedure FindNextFefoLedgerEntry(SalesLine: Record "Sales Line"; UsedEntryNos: List of [Integer]; var BestEntry: Record "Item Ledger Entry"): Boolean
-    var
-        Candidate: Record "Item Ledger Entry";
-        NoExpirationDate: Date;
-        CandidateExpDate: Date;
-        BestExpDate: Date;
-        Found: Boolean;
+    procedure DeleteReserveEntries(CurrentSalesLine: Record "Sales Line")
     begin
-        NoExpirationDate := DMY2Date(31, 12, 9999);
+        Message('Lot tracking removal results:%1', DeleteLotTracking(CurrentSalesLine));
+    end;
 
-        Candidate.SetRange("Item No.", SalesLine."No.");
-        Candidate.SetRange("Location Code", SalesLine."Location Code");
-        Candidate.SetRange("Variant Code", SalesLine."Variant Code");
-        Candidate.SetFilter("Remaining Quantity", '>0');
-        Candidate.SetRange(Open, true);
-
-        Found := false;
-        if Candidate.FindSet() then
+    procedure DeleteLotTracking(CurrentSalesLine: Record "Sales Line"): Text
+    var
+        SalesLine: Record "Sales Line";
+        Item: Record Item;
+        ItemTrackingCode: Record "Item Tracking Code";
+        ReservationEntry: Record "Reservation Entry";
+        Details: Text;
+        Reason: Text;
+    begin
+        SetDocumentFilter(SalesLine, CurrentSalesLine);
+        if SalesLine.FindSet() then
             repeat
-                if not UsedEntryNos.Contains(Candidate."Entry No.") then begin
-                    CandidateExpDate := Candidate."Expiration Date";
-                    if CandidateExpDate = 0D then
-                        CandidateExpDate := NoExpirationDate;
-
-                    if not Found then begin
-                        BestEntry := Candidate;
-                        Found := true;
-                    end else begin
-                        BestExpDate := BestEntry."Expiration Date";
-                        if BestExpDate = 0D then
-                            BestExpDate := NoExpirationDate;
-
-                        if (CandidateExpDate < BestExpDate)
-                           or ((CandidateExpDate = BestExpDate) and (Candidate."Lot No." < BestEntry."Lot No."))
-                           or ((CandidateExpDate = BestExpDate) and (Candidate."Lot No." = BestEntry."Lot No.") and (Candidate."Entry No." < BestEntry."Entry No."))
-                        then
-                            BestEntry := Candidate;
-                    end;
+                if IsLotTrackedItem(SalesLine, Item, ItemTrackingCode) then begin
+                    Item.LockTable();
+                    Item.Get(SalesLine."No.");
+                    ReservationEntry.LockTable();
+                    Reason := GetLineProtectionReason(SalesLine, ItemTrackingCode);
+                    if Reason = '' then begin
+                        DeleteTrackingForLine(SalesLine);
+                        Details += StrSubstNo('\Line %1 (%2): unhandled lot tracking removed.', SalesLine."Line No.", SalesLine."No.");
+                    end else
+                        Details += StrSubstNo('\Line %1 (%2): skipped - %3', SalesLine."Line No.", SalesLine."No.", Reason);
                 end;
-            until Candidate.Next() = 0;
+            until SalesLine.Next() = 0;
+        if Details = '' then
+            Details := '\No lot-tracked item lines found on this document.';
+        exit(Details);
+    end;
 
+    // Read-only audit: do not silently reclassify or repair legacy entries.
+    procedure AuditLotTracking(CurrentSalesLine: Record "Sales Line"): Text
+    var
+        SalesLine: Record "Sales Line";
+        Item: Record Item;
+        ItemTrackingCode: Record "Item Tracking Code";
+        Details: Text;
+        Reason: Text;
+    begin
+        SetDocumentFilter(SalesLine, CurrentSalesLine);
+        if SalesLine.FindSet() then
+            repeat
+                if IsLotTrackedItem(SalesLine, Item, ItemTrackingCode) then begin
+                    Reason := GetInventoryAuditReason(SalesLine);
+                    if Reason <> '' then
+                        Details += StrSubstNo('\Line %1 (%2): %3', SalesLine."Line No.", SalesLine."No.", Reason);
+                end;
+            until SalesLine.Next() = 0;
+        if Details = '' then
+            exit('No malformed reservation entries found in the inventory pools used by this document.');
+        exit('First issue per line/inventory pool (no data changed):' + Details);
+    end;
+
+    local procedure SetDocumentFilter(var SalesLine: Record "Sales Line"; CurrentSalesLine: Record "Sales Line")
+    begin
+        CurrentSalesLine.TestField("Document No.");
+        SalesLine.SetRange("Document Type", CurrentSalesLine."Document Type");
+        SalesLine.SetRange("Document No.", CurrentSalesLine."Document No.");
+    end;
+
+    local procedure IsLotTrackedItem(SalesLine: Record "Sales Line"; var Item: Record Item; var ItemTrackingCode: Record "Item Tracking Code"): Boolean
+    begin
+        if (SalesLine.Type <> SalesLine.Type::Item) or (SalesLine."No." = '') then
+            exit(false);
+        if not Item.Get(SalesLine."No.") then
+            exit(false);
+        if not ItemTrackingCode.Get(Item."Item Tracking Code") then
+            exit(false);
+        // Retain support for LOTEXP, which uses expiration dates without lot-specific tracking.
+        exit(ItemTrackingCode."Lot Specific Tracking" or ItemTrackingCode."Use Expiration Dates");
+    end;
+
+    local procedure GetLineProtectionReason(SalesLine: Record "Sales Line"; ItemTrackingCode: Record "Item Tracking Code"): Text
+    var
+        ReservationEntry: Record "Reservation Entry";
+        TrackingSpecification: Record "Tracking Specification";
+        WhseShipmentLine: Record "Warehouse Shipment Line";
+        WhseActivityLine: Record "Warehouse Activity Line";
+        Reason: Text;
+    begin
+        if not (SalesLine."Document Type" in [SalesLine."Document Type"::Order, SalesLine."Document Type"::Invoice]) then
+            exit('only sales orders and unposted sales invoices are supported.');
+        if SalesLine.IsTemporary() then
+            exit('temporary sales lines are not supported.');
+        if (SalesLine.Quantity < 0) or (SalesLine."Outstanding Qty. (Base)" < 0) then
+            exit('negative sales quantities are not supported.');
+        if (SalesLine."Quantity Shipped" <> 0) or (SalesLine."Quantity Invoiced" <> 0) or (SalesLine."Shipment No." <> '') then
+            exit('posted shipment or invoice quantities exist.');
+        if SalesLine."Drop Shipment" or SalesLine."Special Order" or (SalesLine."Qty. to Assemble to Order" <> 0) then
+            exit('the line is linked to drop shipment, special order or assembly supply.');
+        if ItemTrackingCode."SN Specific Tracking" or ItemTrackingCode."SN Sales Outbound Tracking" or
+           ItemTrackingCode."Package Specific Tracking" or ItemTrackingCode."Package Sales Outb. Tracking"
+        then
+            exit('serial/package tracking requires the standard Item Tracking Lines flow.');
+
+        TrackingSpecification.SetSourceFilter(Database::"Sales Line", SalesLine."Document Type".AsInteger(),
+            SalesLine."Document No.", SalesLine."Line No.", false);
+        TrackingSpecification.SetSourceFilter('', 0);
+        TrackingSpecification.SetFilter("Quantity Handled (Base)", '<>0');
+        if not TrackingSpecification.IsEmpty() then
+            exit('handled item tracking exists.');
+
+        WhseShipmentLine.SetRange("Source Type", Database::"Sales Line");
+        WhseShipmentLine.SetRange("Source Subtype", SalesLine."Document Type".AsInteger());
+        WhseShipmentLine.SetRange("Source No.", SalesLine."Document No.");
+        WhseShipmentLine.SetRange("Source Line No.", SalesLine."Line No.");
+        if not WhseShipmentLine.IsEmpty() then
+            exit('a warehouse shipment exists.');
+        WhseActivityLine.SetRange("Source Type", Database::"Sales Line");
+        WhseActivityLine.SetRange("Source Subtype", SalesLine."Document Type".AsInteger());
+        WhseActivityLine.SetRange("Source No.", SalesLine."Document No.");
+        WhseActivityLine.SetRange("Source Line No.", SalesLine."Line No.");
+        if not WhseActivityLine.IsEmpty() then
+            exit('warehouse activity exists.');
+
+        ReservationEntry.SetSourceFilter(Database::"Sales Line", SalesLine."Document Type".AsInteger(),
+            SalesLine."Document No.", SalesLine."Line No.", false);
+        ReservationEntry.SetSourceFilter('', 0);
+        if ReservationEntry.FindSet() then
+            repeat
+                Reason := GetEntryAuditReason(ReservationEntry);
+                if Reason <> '' then
+                    exit(Reason);
+                if ReservationEntry."Reservation Status" = ReservationEntry."Reservation Status"::Reservation then
+                    exit('a firm reservation exists; use standard reservation management to change it.');
+                if ReservationEntry."Disallow Cancellation" then
+                    exit('an entry disallows cancellation.');
+                if (ReservationEntry."Serial No." <> '') or (ReservationEntry."Package No." <> '') or ReservationEntry.Positive then
+                    exit('tracking outside ordinary outbound lot demand exists.');
+            until ReservationEntry.Next() = 0;
+        exit('');
+    end;
+
+    local procedure GetInventoryAuditReason(SalesLine: Record "Sales Line"): Text
+    var
+        ReservationEntry: Record "Reservation Entry";
+        Reason: Text;
+    begin
+        ReservationEntry.SetRange("Item No.", SalesLine."No.");
+        ReservationEntry.SetRange("Variant Code", SalesLine."Variant Code");
+        ReservationEntry.SetRange("Location Code", SalesLine."Location Code");
+        if ReservationEntry.FindSet() then
+            repeat
+                Reason := GetEntryAuditReason(ReservationEntry);
+                if Reason <> '' then
+                    exit(Reason);
+            until ReservationEntry.Next() = 0;
+        exit('');
+    end;
+
+    local procedure GetEntryAuditReason(ReservationEntry: Record "Reservation Entry"): Text
+    var
+        Partner: Record "Reservation Entry";
+    begin
+        if ReservationEntry."Item Tracking" <> ReservationEntry.GetItemTrackingEntryType() then
+            exit(StrSubstNo('entry %1 has inconsistent item tracking; audit/repair it before assignment.', ReservationEntry."Entry No."));
+        if (ReservationEntry."Quantity (Base)" <> 0) and (ReservationEntry.Positive <> (ReservationEntry."Quantity (Base)" > 0)) then
+            exit(StrSubstNo('entry %1 has an inconsistent quantity sign; audit/repair it before assignment.', ReservationEntry."Entry No."));
+        if ReservationEntry."Reservation Status" in [ReservationEntry."Reservation Status"::Reservation, ReservationEntry."Reservation Status"::Tracking] then begin
+            if not Partner.Get(ReservationEntry."Entry No.", not ReservationEntry.Positive) then
+                exit(StrSubstNo('entry %1 is missing its paired entry; audit/repair it before assignment.', ReservationEntry."Entry No."));
+            if (Partner."Quantity (Base)" <> -ReservationEntry."Quantity (Base)") or
+               (Partner."Item No." <> ReservationEntry."Item No.") or
+               (Partner."Variant Code" <> ReservationEntry."Variant Code") or
+               (Partner."Location Code" <> ReservationEntry."Location Code") or
+               (Partner."Reservation Status" <> ReservationEntry."Reservation Status")
+            then
+                exit(StrSubstNo('entry %1 has an inconsistent pair; audit/repair it before assignment.', ReservationEntry."Entry No."));
+        end else
+            if Partner.Get(ReservationEntry."Entry No.", not ReservationEntry.Positive) then
+                exit(StrSubstNo('entry %1 has an unexpected paired entry; audit/repair it before assignment.', ReservationEntry."Entry No."));
+        exit('');
+    end;
+
+    local procedure DeleteTrackingForLine(SalesLine: Record "Sales Line")
+    var
+        ReservationManagement: Codeunit "Reservation Management";
+    begin
+        ReservationManagement.SetReservSource(SalesLine);
+        ReservationManagement.SetItemTrackingHandling(1); // Allow deletion, after protection checks.
+        ReservationManagement.DeleteReservEntries(true, 0);
+    end;
+
+    local procedure LoadAvailability(SalesLine: Record "Sales Line"; ItemTrackingCode: Record "Item Tracking Code"; var TempSummary: Record "Entry Summary" temporary)
+    var
+        TempTrackingSpecification: Record "Tracking Specification" temporary;
+        SalesLineReserve: Codeunit "Sales Line-Reserve";
+        TrackingDataCollection: Codeunit "Item Tracking Data Collection";
+    begin
+        SalesLineReserve.InitFromSalesLine(TempTrackingSpecification, SalesLine);
+        TrackingDataCollection.SetCurrentBinAndItemTrkgCode(SalesLine."Bin Code", ItemTrackingCode);
+        TrackingDataCollection.RetrieveLookupData(TempTrackingSpecification, true);
+        TrackingDataCollection.GetTempGlobalEntrySummary(TempSummary);
+        TempSummary.SetRange("Serial No.", '');
+        TempSummary.SetRange("Package No.", '');
+        TempSummary.SetFilter("Lot No.", '<>%1', '');
+        TempSummary.SetFilter("Table ID", '<>%1', 0);
+        TempSummary.SetFilter("Total Available Quantity", '>0');
+        TempSummary.SetFilter("Total Quantity", '>0');
+    end;
+
+    local procedure FindNextLot(SalesLine: Record "Sales Line"; var TempSummary: Record "Entry Summary" temporary; var BestSummary: Record "Entry Summary" temporary; ItemTrackingCode: Record "Item Tracking Code"; PostingDate: Date): Boolean
+    var
+        LotInfo: Record "Lot No. Information";
+        Found: Boolean;
+        Eligible: Boolean;
+        AvailableQty: Decimal;
+    begin
+        if TempSummary.FindSet() then
+            repeat
+                Eligible := true;
+                if ItemTrackingCode."Strict Expiration Posting" and (TempSummary."Expiration Date" <> 0D) then
+                    Eligible := TempSummary."Expiration Date" >= PostingDate;
+                // Lot information is optional, but its Blocked flag must be respected.
+                if LotInfo.Get(SalesLine."No.", SalesLine."Variant Code", TempSummary."Lot No.") then
+                    Eligible := Eligible and not LotInfo.Blocked;
+                AvailableQty := TempSummary."Total Available Quantity";
+                if TempSummary."Bin Active" then
+                    AvailableQty := MinQty(AvailableQty, TempSummary.QtyAvailableToSelectFromBin());
+                // Match standard AutoSelectTrackingNo: nonspecific firm reservations
+                // must not be consumed by another order's automatic lot assignment.
+                AvailableQty -= TempSummary."Non-specific Reserved Qty.";
+                Eligible := Eligible and (AvailableQty > 0);
+                if Eligible then
+                    if (not Found) or EarlierLot(TempSummary, BestSummary) then begin
+                        BestSummary := TempSummary;
+                        BestSummary."Total Available Quantity" := AvailableQty;
+                        Found := true;
+                    end;
+            until TempSummary.Next() = 0;
         exit(Found);
     end;
 
-    local procedure SetLocationCode(var SalesLine: Record "Sales Line")
-    var
-        CompanyInfo: Record "Company Information";
+    local procedure EarlierLot(Candidate: Record "Entry Summary" temporary; Best: Record "Entry Summary" temporary): Boolean
     begin
-        CompanyInfo.Get();
-
-        // Only force the line to the company's default location if one is actually configured.
-        // Otherwise leave the line's existing Location Code alone - overwriting it with blank
-        // breaks "Location Mandatory" lines (Location Code must have a value).
-        if CompanyInfo."Location Code" = '' then
-            exit;
-
-        if SalesLine."Location Code" <> CompanyInfo."Location Code" then begin
-            SalesLine."Location Code" := CompanyInfo."Location Code";
-            SalesLine.Modify();
+        if Candidate."Expiration Date" <> Best."Expiration Date" then begin
+            if Candidate."Expiration Date" = 0D then
+                exit(false);
+            if Best."Expiration Date" = 0D then
+                exit(true);
+            exit(Candidate."Expiration Date" < Best."Expiration Date");
         end;
+        if Candidate."Lot No." <> Best."Lot No." then
+            exit(Candidate."Lot No." < Best."Lot No.");
+        exit(Candidate."Entry No." < Best."Entry No.");
+    end;
+
+    local procedure CreateLotTracking(SalesLine: Record "Sales Line"; Summary: Record "Entry Summary" temporary; QtyBase: Decimal)
+    var
+        Tracking: Record "Reservation Entry";
+        CreateReservEntry: Codeunit "Create Reserv. Entry";
+        ItemTrackingManagement: Codeunit "Item Tracking Management";
+        EntryStatus: Enum "Reservation Status";
+    begin
+        Tracking."Lot No." := Summary."Lot No.";
+        CreateReservEntry.CreateReservEntryFor(Database::"Sales Line", SalesLine."Document Type".AsInteger(),
+            SalesLine."Document No.", '', 0, SalesLine."Line No.", SalesLine."Qty. per Unit of Measure", 0, QtyBase, Tracking);
+        CreateReservEntry.SetDates(Summary."Warranty Date", Summary."Expiration Date");
+        // Keep the standard defaults for unhandled tracking: both quantities equal
+        // the assigned base quantity (Tracking Specification.InitQtyToShip). Setting
+        // handle quantity to zero here would hide the demand from lot availability.
+        EntryStatus := EntryStatus::Prospect;
+        if ItemTrackingManagement.IsOrderNetworkEntity(Database::"Sales Line", SalesLine."Document Type".AsInteger()) then
+            EntryStatus := EntryStatus::Surplus;
+        CreateReservEntry.CreateEntry(SalesLine."No.", SalesLine."Variant Code", SalesLine."Location Code",
+            SalesLine.Description, 0D, SalesLine."Shipment Date", 0, EntryStatus);
+    end;
+
+    local procedure GetPostingDate(SalesLine: Record "Sales Line"): Date
+    var
+        SalesHeader: Record "Sales Header";
+    begin
+        if SalesHeader.Get(SalesLine."Document Type", SalesLine."Document No.") then
+            if SalesHeader."Posting Date" <> 0D then
+                exit(SalesHeader."Posting Date");
+        exit(WorkDate());
+    end;
+
+    local procedure MinQty(First: Decimal; Second: Decimal): Decimal
+    begin
+        if Second < 0 then
+            exit(0);
+        if First < Second then
+            exit(First);
+        exit(Second);
     end;
 }

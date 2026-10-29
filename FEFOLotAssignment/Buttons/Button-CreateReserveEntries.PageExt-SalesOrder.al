@@ -11,14 +11,28 @@ pageextension 50110 ButtonCreateReserveEntries extends "Sales Order Subform"
             action(DeleteReserveEntries)
             {
                 ApplicationArea = All;
-                Caption = 'Delete Reserve Entries';
+                Caption = 'Delete Lot Tracking';
                 Image = DeleteRow;
                 trigger OnAction()
                 var
                     Helper: Codeunit ReserveEntriesHelper;
                 begin
-                    Message('Button Delete Reserve Entries clicked.');
+                    CurrPage.SaveRecord();
                     Helper.DeleteReserveEntries(Rec);
+                    CurrPage.Update(false);
+                end;
+            }
+            action(AuditFefoLotTracking)
+            {
+                ApplicationArea = All;
+                Caption = 'Audit Lot Tracking';
+                ToolTip = 'Check the inventory used by this document for malformed reservation entries without changing data.';
+                Image = View;
+                trigger OnAction()
+                var
+                    Helper: Codeunit ReserveEntriesHelper;
+                begin
+                    Message('%1', Helper.AuditLotTracking(Rec));
                 end;
             }
             action(CreateReserveEntries)
@@ -30,8 +44,9 @@ pageextension 50110 ButtonCreateReserveEntries extends "Sales Order Subform"
                 var
                     Helper: Codeunit ReserveEntriesHelper;
                 begin
-                    Message('Button Assign Lot Nos. clicked.');
+                    CurrPage.SaveRecord();
                     Helper.CreateReserveEntries(Rec);
+                    CurrPage.Update(false);
                 end;
             }
         }

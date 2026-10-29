@@ -50,7 +50,7 @@ codeunit 50113 BulkAssignFefoLotsMgt
             exit;
         end;
 
-        if not Confirm('This will assign FEFO lot reservations to all %1 %2, processed oldest to newest by Order Date. Continue?', false, TotalCount, DocTypeCaption) then
+        if not Confirm('This will assign FEFO lot tracking to all %1 %2, processed oldest to newest by Order Date. Continue?', false, TotalCount, DocTypeCaption) then
             exit;
 
         Window.Open('Assigning FEFO lots to document #1##########\Progress: @2@@@@@@@@@@@@@@@@@@@@');
@@ -69,7 +69,7 @@ codeunit 50113 BulkAssignFefoLotsMgt
         Window.Close();
 
         if AllShortages <> '' then
-            Message('FEFO lot assignment completed for %1 %2.\Some lines could not be fully reserved due to insufficient stock:%3', ProcessedNos.Count(), DocTypeCaption, AllShortages)
+            Message('FEFO lot assignment completed for %1 %2.\Shortages or skipped lines (quantities in base units):%3', ProcessedNos.Count(), DocTypeCaption, AllShortages)
         else
             Message('FEFO lot assignment completed for %1 %2.', ProcessedNos.Count(), DocTypeCaption);
     end;
@@ -91,7 +91,7 @@ codeunit 50113 BulkAssignFefoLotsMgt
             exit;
         end;
 
-        if not Confirm('This will assign FEFO lot reservations to %1 %2, processed oldest to newest by Order Date. Continue?', false, TotalCount, DocTypeCaption) then
+        if not Confirm('This will assign FEFO lot tracking to %1 %2, processed oldest to newest by Order Date. Continue?', false, TotalCount, DocTypeCaption) then
             exit;
 
         Window.Open('Assigning FEFO lots to document #1##########\Progress: @2@@@@@@@@@@@@@@@@@@@@');
@@ -110,7 +110,7 @@ codeunit 50113 BulkAssignFefoLotsMgt
         Window.Close();
 
         if AllShortages <> '' then
-            Message('FEFO lot assignment completed for %1 %2.\Some lines could not be fully reserved due to insufficient stock:%3', ProcessedNos.Count(), DocTypeCaption, AllShortages)
+            Message('FEFO lot assignment completed for %1 %2.\Shortages or skipped lines (quantities in base units):%3', ProcessedNos.Count(), DocTypeCaption, AllShortages)
         else
             Message('FEFO lot assignment completed for %1 %2.', ProcessedNos.Count(), DocTypeCaption);
     end;
@@ -121,6 +121,7 @@ codeunit 50113 BulkAssignFefoLotsMgt
         ReserveHelper: Codeunit ReserveEntriesHelper;
         TotalCount: Integer;
         ProcessedCount: Integer;
+        AllResults: Text;
         Window: Dialog;
     begin
         TotalCount := SelectedHeader.Count();
@@ -129,10 +130,10 @@ codeunit 50113 BulkAssignFefoLotsMgt
             exit;
         end;
 
-        if not Confirm('This will delete all lot reservation entries for %1 %2. Continue?', false, TotalCount, DocTypeCaption) then
+        if not Confirm('This will remove eligible unhandled lot tracking for %1 %2. Continue?', false, TotalCount, DocTypeCaption) then
             exit;
 
-        Window.Open('Deleting reservation entries for document #1##########\Progress: @2@@@@@@@@@@@@@@@@@@@@');
+        Window.Open('Removing lot tracking for document #1##########\Progress: @2@@@@@@@@@@@@@@@@@@@@');
         if SelectedHeader.FindSet() then
             repeat
                 ProcessedCount += 1;
@@ -142,11 +143,11 @@ codeunit 50113 BulkAssignFefoLotsMgt
                 Clear(SalesLine);
                 SalesLine."Document Type" := SelectedHeader."Document Type";
                 SalesLine."Document No." := SelectedHeader."No.";
-                ReserveHelper.DeleteReserveEntries(SalesLine);
+                AllResults += StrSubstNo('\Document %1:%2', SelectedHeader."No.", ReserveHelper.DeleteLotTracking(SalesLine));
             until SelectedHeader.Next() = 0;
         Window.Close();
 
-        Message('Reservation entries deleted for %1 %2.', ProcessedCount, DocTypeCaption);
+        Message('Lot tracking removal completed for %1 %2. Results:%3', ProcessedCount, DocTypeCaption, AllResults);
     end;
 
     // Picks the unposted document (not already processed) with the earliest Order Date,

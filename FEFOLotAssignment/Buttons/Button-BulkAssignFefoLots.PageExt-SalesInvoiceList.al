@@ -11,7 +11,7 @@ pageextension 50115 ButtonBulkAssignFefo_SIList extends "Sales Invoice List"
             {
                 ApplicationArea = All;
                 Caption = 'Assign FEFO Lots (All Invoices)';
-                ToolTip = 'Go through all unposted sales invoices, oldest to newest by Order Date, and assign lot reservations in FEFO order.';
+                ToolTip = 'Go through all unposted sales invoices, oldest to newest by Order Date, and assign lot tracking in FEFO order.';
                 Image = LotInfo;
                 Promoted = true;
                 PromotedCategory = Process;
@@ -28,7 +28,7 @@ pageextension 50115 ButtonBulkAssignFefo_SIList extends "Sales Invoice List"
             {
                 ApplicationArea = All;
                 Caption = 'Assign FEFO Lots (Selected Invoices)';
-                ToolTip = 'Assign FEFO lot reservations to the selected sales invoices only, processed oldest to newest by Order Date.';
+                ToolTip = 'Assign FEFO lot tracking to the selected sales invoices only, processed oldest to newest by Order Date.';
                 Image = LotInfo;
                 Promoted = true;
                 PromotedCategory = Process;
@@ -46,8 +46,8 @@ pageextension 50115 ButtonBulkAssignFefo_SIList extends "Sales Invoice List"
             action(DeleteReserveEntriesSelectedInvoices)
             {
                 ApplicationArea = All;
-                Caption = 'Delete Reserve Entries (Selected Invoices)';
-                ToolTip = 'Delete all lot reservation entries for the selected sales invoices.';
+                Caption = 'Delete Lot Tracking (Selected Invoices)';
+                ToolTip = 'Remove eligible unhandled lot tracking for the selected sales invoices.';
                 Image = DeleteRow;
                 Promoted = true;
                 PromotedCategory = Process;

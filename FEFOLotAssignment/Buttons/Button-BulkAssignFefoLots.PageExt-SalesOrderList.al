@@ -11,7 +11,7 @@ pageextension 50114 ButtonBulkAssignFefo_SOList extends "Sales Order List"
             {
                 ApplicationArea = All;
                 Caption = 'Assign FEFO Lots (All Orders)';
-                ToolTip = 'Go through all unposted sales orders, oldest to newest by Order Date, and assign lot reservations in FEFO order.';
+                ToolTip = 'Go through all unposted sales orders, oldest to newest by Order Date, and assign lot tracking in FEFO order.';
                 Image = LotInfo;
                 Promoted = true;
                 PromotedCategory = Process;
@@ -28,7 +28,7 @@ pageextension 50114 ButtonBulkAssignFefo_SOList extends "Sales Order List"
             {
                 ApplicationArea = All;
                 Caption = 'Assign FEFO Lots (Selected Orders)';
-                ToolTip = 'Assign FEFO lot reservations to the selected sales orders only, processed oldest to newest by Order Date.';
+                ToolTip = 'Assign FEFO lot tracking to the selected sales orders only, processed oldest to newest by Order Date.';
                 Image = LotInfo;
                 Promoted = true;
                 PromotedCategory = Process;
@@ -46,8 +46,8 @@ pageextension 50114 ButtonBulkAssignFefo_SOList extends "Sales Order List"
             action(DeleteReserveEntriesSelectedOrders)
             {
                 ApplicationArea = All;
-                Caption = 'Delete Reserve Entries (Selected Orders)';
-                ToolTip = 'Delete all lot reservation entries for the selected sales orders.';
+                Caption = 'Delete Lot Tracking (Selected Orders)';
+                ToolTip = 'Remove eligible unhandled lot tracking for the selected sales orders.';
                 Image = DeleteRow;
                 Promoted = true;
                 PromotedCategory = Process;
