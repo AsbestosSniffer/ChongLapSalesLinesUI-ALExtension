@@ -201,12 +201,8 @@ function ipcOnAddToSalesLines() {
         return { no: ipcCart[no].no, quantity: ipcCart[no].quantity };
     });
 
-    if (lines.length === 0) {
-        Microsoft.Dynamics.NAV.InvokeExtensibilityMethod('RequestClose', []);
-        return;
-    }
-
-    Microsoft.Dynamics.NAV.InvokeExtensibilityMethod('AddLines', [JSON.stringify(lines)]);
+    var paymentOption = document.getElementById('ipc-payment-option').value;
+    Microsoft.Dynamics.NAV.InvokeExtensibilityMethod('AddLines', [JSON.stringify(lines), paymentOption]);
 }
 
 function ipcEscapeHtml(text) {

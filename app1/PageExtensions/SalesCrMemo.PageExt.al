@@ -18,9 +18,11 @@ pageextension 50104 "Sales CrMemo Ext" extends "Sales Credit Memo"
                 var
                     ItemPickerCart: Page "Item Picker Cart";
                 begin
+                    CurrPage.SaveRecord();
                     ItemPickerCart.SetSalesHeader(Rec);
                     ItemPickerCart.RunModal();
 
+                    Rec.Get(Rec."Document Type", Rec."No.");
                     CurrPage.Update(false);
                 end;
             }

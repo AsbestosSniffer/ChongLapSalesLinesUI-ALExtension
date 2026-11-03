@@ -20,6 +20,6 @@ controladdin ItemPickerCart
     // JavaScript -> AL
     event ControlAddInReady();
     event RequestSearch(searchText: Text);
-    event AddLines(cartJson: Text);
+    event AddLines(cartJson: Text; paymentOption: Text);
     event RequestClose();
 }

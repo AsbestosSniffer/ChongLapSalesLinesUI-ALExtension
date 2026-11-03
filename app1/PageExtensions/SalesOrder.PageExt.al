@@ -18,9 +18,11 @@ pageextension 50101 "Sales Order Ext" extends "Sales Order"
                 var
                     ItemPickerCart: Page "Item Picker Cart";
                 begin
+                    CurrPage.SaveRecord();
                     ItemPickerCart.SetSalesHeader(Rec);
                     ItemPickerCart.RunModal();
 
+                    Rec.Get(Rec."Document Type", Rec."No.");
                     CurrPage.Update(false);
                 end;
             }

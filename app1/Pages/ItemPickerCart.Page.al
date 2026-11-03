@@ -21,9 +21,9 @@ page 50100 "Item Picker Cart"
                     SearchItems(searchText);
                 end;
 
-                trigger AddLines(cartJson: Text)
+                trigger AddLines(cartJson: Text; paymentOption: Text)
                 begin
-                    AddLinesToDocument(cartJson);
+                    AddLinesToDocument(cartJson, paymentOption);
                     CurrPage.Close();
                 end;
 
@@ -124,7 +124,7 @@ page 50100 "Item Picker Cart"
         exit('data:' + MimeType + ';base64,' + Base64Convert.ToBase64(PictureInStream));
     end;
 
-    local procedure AddLinesToDocument(CartJson: Text)
+    local procedure AddLinesToDocument(CartJson: Text; PaymentOption: Text)
     var
         SalesLine: Record "Sales Line";
         CartArray: JsonArray;
@@ -134,12 +134,36 @@ page 50100 "Item Picker Cart"
         ItemNo: Code[20];
         Quantity: Decimal;
         NextLineNo: Integer;
+        PaymentDays: Integer;
+        InvoiceDiscountPct: Decimal;
+        InvalidPaymentOptionErr: Label 'Select either 30 days / 0% or 7 days / 2%.';
+        InvalidCartErr: Label 'The cart could not be read. Close Quick Add and try again.';
     begin
         if not SalesHeaderSet then
             exit;
 
         if not CartArray.ReadFrom(CartJson) then
-            exit;
+            Error(InvalidCartErr);
+
+        case PaymentOption of
+            '30':
+                begin
+                    PaymentDays := 30;
+                    InvoiceDiscountPct := 0;
+                end;
+            '7':
+                begin
+                    PaymentDays := 7;
+                    InvoiceDiscountPct := 2;
+                end;
+            else
+                Error(InvalidPaymentOptionErr);
+        end;
+
+        SalesHeader.Get(SalesHeader."Document Type", SalesHeader."No.");
+        SalesHeader.TestStatusOpen();
+        SalesHeader.Validate("Payment Terms Code", GetPaymentTermsCode(PaymentDays));
+        SalesHeader.Modify(true);
 
         SalesLine.SetRange("Document Type", SalesHeader."Document Type");
         SalesLine.SetRange("Document No.", SalesHeader."No.");
@@ -174,5 +198,46 @@ page 50100 "Item Picker Cart"
                 SalesLine.Modify(true);
             end;
         end;
+
+        ApplyInvoiceDiscount(InvoiceDiscountPct);
+    end;
+
+    local procedure GetPaymentTermsCode(PaymentDays: Integer): Code[10]
+    var
+        PaymentTerms: Record "Payment Terms";
+        DueDateCalculation: DateFormula;
+        MissingPaymentTermsErr: Label 'Set up a payment term with a due date calculation of %1 days and a payment discount of 0% before using this option.', Comment = '%1 = number of days';
+    begin
+        Evaluate(DueDateCalculation, StrSubstNo('<%1D>', PaymentDays));
+        PaymentTerms.SetRange("Due Date Calculation", DueDateCalculation);
+        // The selected discount is an invoice discount, not a cash payment discount.
+        PaymentTerms.SetRange("Discount %", 0);
+        if not PaymentTerms.FindFirst() then
+            Error(MissingPaymentTermsErr, PaymentDays);
+
+        exit(PaymentTerms.Code);
+    end;
+
+    local procedure ApplyInvoiceDiscount(InvoiceDiscountPct: Decimal)
+    var
+        SalesLine: Record "Sales Line";
+        Currency: Record Currency;
+        DocumentTotals: Codeunit "Document Totals";
+        SalesCalcDiscountByType: Codeunit "Sales - Calc Discount By Type";
+        InvoiceDiscountAmount: Decimal;
+    begin
+        SalesHeader.Get(SalesHeader."Document Type", SalesHeader."No.");
+        if SalesHeader."Currency Code" = '' then
+            Currency.InitRoundingPrecision()
+        else
+            Currency.Get(SalesHeader."Currency Code");
+
+        SalesLine."Document Type" := SalesHeader."Document Type";
+        SalesLine."Document No." := SalesHeader."No.";
+        // Use the same calculation as the standard Invoice Discount % field.
+        InvoiceDiscountAmount := Round(
+            DocumentTotals.CalcTotalSalesAmountOnlyDiscountAllowed(SalesLine) * InvoiceDiscountPct / 100,
+            Currency."Amount Rounding Precision");
+        SalesCalcDiscountByType.ApplyInvDiscBasedOnAmt(InvoiceDiscountAmount, SalesHeader);
     end;
 }
